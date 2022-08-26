@@ -19,6 +19,12 @@ func WithSQPoll() IOURingOption {
 	}
 }
 
+func WithIOPoll() IOURingOption {
+	return func(iour *IOURing) {
+		iour.params.Flags |= iouring_syscall.IORING_SETUP_IOPOLL
+	}
+}
+
 // WithSQPollThreadCPU the poll thread will be bound to the cpu set, only meaningful when WithSQPoll option
 func WithSQPollThreadCPU(cpu uint32) IOURingOption {
 	return func(iour *IOURing) {
