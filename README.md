@@ -72,6 +72,30 @@ l.Post(func() { // runs on the loop thread
 
 See `bench/loop.go` for a complete TCP forwarding proxy (ordering, short writes, `-ENOBUFS`, connection teardown).
 
+### Busy polling: `LoopConfig.SpinTime`
+
+Before blocking in `io_uring_enter`, the loop can busy-poll for completions for up to `SpinTime`.
+Completions that arrive during the spin are handled without a sleep/wake-up cycle, trading CPU for latency.
+This pays off where wake-ups are expensive (VMs, low-concurrency request/response); 10–50µs is a good start.
+
+### Zero-copy send: `SendZC`, registered buffers
+
+- `SendZC(fd, b, flags, zcFlags, h)` uses `IORING_OP_SEND_ZC` (6.0+): the kernel transmits directly from the pages of `b`.
+  The handler is called **twice**: the result CQE (`res` = bytes sent; `IORING_CQE_F_MORE` means a notification follows),
+  then the notification CQE (`IORING_CQE_F_NOTIF`). Only after the notification may `b` be modified or reused.
+- `LoopConfig.FixedBuffers` registers user memory with `IORING_REGISTER_BUFFERS` once (pages pinned and mapped up front);
+  `SendZCFixed(fd, b, l.FixedBufferIndex(i), ...)` then skips the per-request page pinning.
+- `BufferRingConfig.Fixed: true` registers the provided buffer ring's memory as a fixed buffer too. That one region is shared
+  by user space and the kernel: the kernel receives into it (provided buffers), and `SendZCFixed(fd, data, uint16(br.FixedIndex()), ...)`
+  transmits from it in place. Forwarding or echo then needs no user-space copy, and on a real NIC no kernel copy on transmit either.
+- `IORING_SEND_ZC_REPORT_USAGE` makes the notification report whether data was copied (`res & IORING_NOTIF_USAGE_ZC_COPIED`).
+
+Caveats (from the kernel docs): zero copy only pays off above roughly 10KB per send; **traffic looped to a local socket
+is always copied** (no gain on loopback or between containers on one host); registered buffers count against
+`RLIMIT_MEMLOCK` (`ulimit -l`), and `NewLoop` returns `ENOMEM` when it is too low.
+Zero-copy *receive* (`IORING_OP_RECV_ZC`, zcrx) needs NIC support (header split, flow steering, a dedicated RX queue)
+and is not implemented here.
+
 # Testing and benchmarks (Docker, works on macOS)
 
 ```
@@ -155,6 +179,12 @@ p99 延迟：c=64/128B 时 iouring-loop 为 2.1ms（epoll 4.6ms）；c=512/16KB 
 - 直接回调模式：回调中提交的请求与等待下一批完成事件合并为一次系统调用
 - 新增 `Loop` API：单线程事件循环、multishot recv/accept、provided buffer ring、`SINGLE_ISSUER`/`DEFER_TASKRUN`、注册文件
 - 新增 `WithCoopTaskRun()` 选项
+
+## 新增（零拷贝与轮询）
+- `LoopConfig.SpinTime`：阻塞前忙轮询，降低唤醒延迟
+- `Loop.SendZC` / `SendZCFixed`：IORING_OP_SEND_ZC 零拷贝发送，处理结果 CQE 与通知 CQE
+- `LoopConfig.FixedBuffers`、`BufferRingConfig.Fixed`：注册固定缓冲区；buffer ring 注册后接收与零拷贝发送共用同一块内存
+- 补充 opcode 常量（至 `IORING_OP_SENDMSG_ZC`）与 `IORING_SEND_ZC_REPORT_USAGE`、`IORING_NOTIF_USAGE_ZC_COPIED`
 
 ## 行为变化
 - 最低 Go 版本 1.18

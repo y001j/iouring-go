@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -46,6 +47,10 @@ type Loop struct {
 
 	bufRings []*BufferRing
 
+	fixedBufs     [][]byte // 注册缓冲区（保持引用，防止被 GC 回收）
+	userFixedBase uint16   // LoopConfig.FixedBuffers[0] 的注册下标
+	spin          time.Duration
+
 	fixedFree []int32 // 注册文件表的空闲下标
 
 	postMu   sync.Mutex
@@ -75,6 +80,15 @@ type LoopConfig struct {
 	// 启用后可用 RegisterFile 把 fd 注册进表，再以 FixedFile(idx) 作为 fd 提交请求，
 	// 内核省去每次请求按 fd 查找文件、增减引用计数的开销。
 	FixedFiles int
+	// FixedBuffers 注册为 io_uring 固定缓冲区（IORING_REGISTER_BUFFERS）的用户内存。
+	// 内核一次性 pin 住这些页并建立映射，之后 SendZCFixed 等请求不再逐次 pin/unpin。
+	// 第 i 个缓冲区的下标为 l.FixedBufferIndex(i)。内存必须在 Loop 关闭前保持不变。
+	// 注册的内存计入 RLIMIT_MEMLOCK（ulimit -l），不足时 NewLoop 返回 ENOMEM。
+	FixedBuffers [][]byte
+	// SpinTime 为 Loop 在没有完成事件时阻塞前的忙轮询时长，0 表示不轮询。
+	// 轮询期间新到达的完成事件无需经过睡眠/唤醒即可处理，以 CPU 换取更低的延迟；
+	// 在唤醒代价高的环境（虚拟机、低并发 ping-pong）中收益明显，建议 10µs~50µs。
+	SpinTime time.Duration
 }
 
 // fixedFileBit 标记"fd"参数实际是注册文件表中的下标
@@ -87,6 +101,10 @@ func FixedFile(idx int) int { return idx | fixedFileBit }
 type BufferRingConfig struct {
 	Count int // 缓冲区数量，必须为 2 的幂，最大 32768
 	Size  int // 每个缓冲区的字节数
+	// Fixed 同时把整个缓冲区内存注册为一个固定缓冲区（IORING_REGISTER_BUFFERS）。
+	// 这样这块内存同时用于接收（provided buffer）和零拷贝发送（SendZCFixed）：
+	// 收到的数据无需拷贝即可原地发出，例如 echo、转发。下标见 BufferRing.FixedIndex。
+	Fixed bool
 }
 
 var ErrLoopClosed = errors.New("iouring loop closed")
@@ -167,6 +185,10 @@ func (l *Loop) setup(cfg LoopConfig) error {
 		}
 		l.bufRings = append(l.bufRings, br)
 	}
+	if err := l.registerBuffers(cfg); err != nil {
+		return err
+	}
+	l.spin = cfg.SpinTime
 
 	// eventfd 用于其他 goroutine 唤醒阻塞在 io_uring_enter 中的 Loop（见 Post）。
 	// 使用阻塞模式，读取由 io_uring 异步完成。
@@ -176,6 +198,40 @@ func (l *Loop) setup(cfg LoopConfig) error {
 	l.armEventfd()
 	return nil
 }
+
+// registerBuffers 把需要零拷贝发送的内存一次性注册为固定缓冲区：
+// 先是 Fixed 的 buffer ring（按顺序），然后是 LoopConfig.FixedBuffers。
+func (l *Loop) registerBuffers(cfg LoopConfig) error {
+	var iovs []unix.Iovec
+	add := func(b []byte) uint16 {
+		var iov unix.Iovec
+		iov.Base = &b[0]
+		iov.SetLen(len(b))
+		iovs = append(iovs, iov)
+		l.fixedBufs = append(l.fixedBufs, b)
+		return uint16(len(iovs) - 1)
+	}
+	for i, rc := range cfg.BufferRings {
+		if rc.Fixed {
+			l.bufRings[i].fixedIdx = int(add(l.bufRings[i].bufMem))
+		}
+	}
+	l.userFixedBase = uint16(len(iovs))
+	for _, b := range cfg.FixedBuffers {
+		if len(b) == 0 {
+			return errors.New("iouring: empty fixed buffer")
+		}
+		add(b)
+	}
+	if len(iovs) == 0 {
+		return nil
+	}
+	return iouring_syscall.IOURingRegister(l.fd, iouring_syscall.IORING_REGISTER_BUFFERS,
+		unsafe.Pointer(&iovs[0]), uint32(len(iovs)))
+}
+
+// FixedBufferIndex 返回 LoopConfig.FixedBuffers[i] 的注册下标
+func (l *Loop) FixedBufferIndex(i int) uint16 { return l.userFixedBase + uint16(i) }
 
 func (l *Loop) armEventfd() {
 	h := func(res int32, flags uint32) {
@@ -243,6 +299,9 @@ func (l *Loop) run() {
 			return
 		}
 
+		if l.spin > 0 && atomic.LoadInt32(&l.postN) == 0 && !l.cqReady() {
+			l.spinWait()
+		}
 		var wait uint32
 		if atomic.LoadInt32(&l.postN) == 0 && !l.cqReady() {
 			// 先声明即将睡眠，再检查一次 posted，避免与 Post 竞争导致丢失唤醒
@@ -262,6 +321,22 @@ func (l *Loop) run() {
 				break
 			}
 			l.dispatch(cqes[:n])
+		}
+	}
+}
+
+// spinWait 在阻塞前忙轮询至多 l.spin：期间提交待提交的 SQE 并检查完成事件。
+// DEFER_TASKRUN 下完成事件只有带 GETEVENTS 进入内核才会处理，因此轮询时调用 enter(0)
+// （不等待）；其他模式下 enter(0) 无事可做时不产生系统调用，只检查 CQ。
+func (l *Loop) spinWait() {
+	deadline := time.Now().Add(l.spin)
+	for {
+		l.enter(0)
+		if l.cqReady() || atomic.LoadInt32(&l.postN) != 0 || atomic.LoadInt32(&l.stopping) != 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			return
 		}
 	}
 }
@@ -482,6 +557,41 @@ func (l *Loop) Send(fd int, b []byte, flags int, h Handler) uint64 {
 	return ud
 }
 
+// SendZC 零拷贝发送 b（IORING_OP_SEND_ZC，Linux 6.0+）。内核直接引用 b 所在的页，不拷贝到 socket 缓冲区。
+//
+// 一次 SendZC 通常产生两个 CQE，都会调用 h：
+//   - 结果 CQE：res 为发送的字节数（可能短写）或 -errno；flags 带 IORING_CQE_F_MORE 表示随后还有通知 CQE；
+//   - 通知 CQE：flags 带 IORING_CQE_F_NOTIF，表示内核已不再使用 b，此后才能修改或复用 b。
+//
+// 结果 CQE 不带 IORING_CQE_F_MORE 时不会有通知 CQE。b 在最后一个 CQE 之前保持存活。
+// zcFlags 可为 IORING_SEND_ZC_REPORT_USAGE：通知 CQE 的 res 若含 IORING_NOTIF_USAGE_ZC_COPIED
+// 表示数据实际被拷贝了（例如发往本机回环的数据总是会被拷贝）。
+// 一般只有约 10KB 以上的发送才能从零拷贝中获益。
+func (l *Loop) SendZC(fd int, b []byte, flags int, zcFlags uint16, h Handler) uint64 {
+	return l.sendZC(fd, b, flags, zcFlags, false, 0, h)
+}
+
+// SendZCFixed 与 SendZC 相同，但 b 必须位于下标为 bufIndex 的注册缓冲区内
+// （见 LoopConfig.FixedBuffers、BufferRingConfig.Fixed），内核无需逐次 pin 页。
+func (l *Loop) SendZCFixed(fd int, b []byte, bufIndex uint16, flags int, zcFlags uint16, h Handler) uint64 {
+	return l.sendZC(fd, b, flags, zcFlags, true, bufIndex, h)
+}
+
+func (l *Loop) sendZC(fd int, b []byte, flags int, zcFlags uint16, fixed bool, bufIndex uint16, h Handler) uint64 {
+	sqe := l.getSQE()
+	sqe.PrepOperation(iouring_syscall.IORING_OP_SEND_ZC, int32(fd), bufAddr(b), uint32(len(b)), 0)
+	setFd(sqe, fd)
+	sqe.SetOpFlags(uint32(flags))
+	if fixed {
+		zcFlags |= iouring_syscall.IORING_RECVSEND_FIXED_BUF
+		sqe.SetBufIndex(bufIndex)
+	}
+	sqe.SetIoprio(zcFlags)
+	ud := l.alloc(h, b)
+	sqe.SetUserData(ud)
+	return ud
+}
+
 // RecvMultishot 提交 multishot recv（Linux 6.0+）：一次提交持续接收，
 // 每次收到数据产生一个 CQE，数据位于内核从 br 中挑选的缓冲区里：
 //
@@ -547,21 +657,22 @@ func (l *Loop) Cancel(target uint64, h Handler) uint64 {
 // 内核在接收数据时从中挑选缓冲区，用户处理完后通过 Recycle 归还。
 // 所有方法只能在 Loop 线程中调用。
 type BufferRing struct {
-	l       *Loop
-	bgid    uint16
-	mask    uint16
-	size    int
-	ringMem []byte // count 个 struct io_uring_buf，页对齐
-	bufMem  []byte // count * size 字节的缓冲区
-	tail    uint16
-	dirty   bool
+	l        *Loop
+	fixedIdx int // 注册缓冲区下标，-1 表示未注册
+	bgid     uint16
+	mask     uint16
+	size     int
+	ringMem  []byte // count 个 struct io_uring_buf，页对齐
+	bufMem   []byte // count * size 字节的缓冲区
+	tail     uint16
+	dirty    bool
 }
 
 func newBufferRing(l *Loop, bgid uint16, count, size int) (*BufferRing, error) {
 	if count <= 0 || count > 32768 || count&(count-1) != 0 || size <= 0 {
 		return nil, errors.New("iouring: invalid buffer ring config")
 	}
-	br := &BufferRing{l: l, bgid: bgid, mask: uint16(count - 1), size: size}
+	br := &BufferRing{l: l, fixedIdx: -1, bgid: bgid, mask: uint16(count - 1), size: size}
 	var err error
 	prot, flags := unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS|unix.MAP_POPULATE
 	if br.ringMem, err = unix.Mmap(-1, 0, count*iouring_syscall.SizeofIOURingBuf, prot, flags); err != nil {
@@ -587,6 +698,10 @@ func newBufferRing(l *Loop, bgid uint16, count, size int) (*BufferRing, error) {
 	br.publish()
 	return br, nil
 }
+
+// FixedIndex 返回整个缓冲区内存注册为固定缓冲区后的下标（BufferRingConfig.Fixed），未注册时为 -1。
+// 可用 SendZCFixed(fd, data, uint16(br.FixedIndex()), ...) 零拷贝发送 Get 得到的 data。
+func (br *BufferRing) FixedIndex() int { return br.fixedIdx }
 
 // Size 返回单个缓冲区大小
 func (br *BufferRing) Size() int { return br.size }

@@ -57,6 +57,15 @@ const (
 	IORING_OP_MKDIRAT
 	IORING_OP_SYMLINKAT
 	IORING_OP_LINKAT
+	IORING_OP_MSG_RING   // 5.18
+	IORING_OP_FSETXATTR  // 5.19
+	IORING_OP_SETXATTR   // 5.19
+	IORING_OP_FGETXATTR  // 5.19
+	IORING_OP_GETXATTR   // 5.19
+	IORING_OP_SOCKET     // 5.19
+	IORING_OP_URING_CMD  // 5.19
+	IORING_OP_SEND_ZC    // 6.0：零拷贝 send，产生结果 CQE + 通知 CQE（IORING_CQE_F_NOTIF）
+	IORING_OP_SENDMSG_ZC // 6.1
 )
 
 const (
@@ -176,20 +185,24 @@ const (
 
 // CQE flags
 const (
-	IORING_CQE_F_BUFFER uint32 = 1 << iota // 使用了 provided buffer，buffer id 位于 flags 高 16 位
-	IORING_CQE_F_MORE                      // multishot 请求仍然有效，后续还会产生 CQE
-	IORING_CQE_F_SOCK_NONEMPTY             // socket 中仍有可读数据
-	IORING_CQE_F_NOTIF                     // SEND_ZC 的通知 CQE
+	IORING_CQE_F_BUFFER        uint32 = 1 << iota // 使用了 provided buffer，buffer id 位于 flags 高 16 位
+	IORING_CQE_F_MORE                             // multishot 请求仍然有效，后续还会产生 CQE
+	IORING_CQE_F_SOCK_NONEMPTY                    // socket 中仍有可读数据
+	IORING_CQE_F_NOTIF                            // SEND_ZC 的通知 CQE
 )
 
 const IORING_CQE_BUFFER_SHIFT = 16
 
 // send/recv 的 ioprio 标志
 const (
-	IORING_RECVSEND_POLL_FIRST uint16 = 1 << iota // 先 poll 再发起 IO
-	IORING_RECV_MULTISHOT                         // multishot recv（6.0+），需配合 IOSQE_BUFFER_SELECT
-	IORING_RECVSEND_FIXED_BUF
+	IORING_RECVSEND_POLL_FIRST  uint16 = 1 << iota // 先 poll 再发起 IO
+	IORING_RECV_MULTISHOT                          // multishot recv（6.0+），需配合 IOSQE_BUFFER_SELECT
+	IORING_RECVSEND_FIXED_BUF                      // 使用注册缓冲区，buf_index 为其下标
+	IORING_SEND_ZC_REPORT_USAGE                    // SEND_ZC：通知 CQE 的 res 报告数据是否被拷贝
 )
+
+// IORING_NOTIF_USAGE_ZC_COPIED 在 SEND_ZC 通知 CQE 的 res 中置位，表示数据实际被拷贝（未能零拷贝）
+const IORING_NOTIF_USAGE_ZC_COPIED int32 = -1 << 31
 
 // accept 的 ioprio 标志
 const IORING_ACCEPT_MULTISHOT uint16 = 1 << 0 // multishot accept（5.19+）
