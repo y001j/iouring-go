@@ -22,9 +22,65 @@
 - [ ] set logger
 - [ ] register buffers and IO with buffers
 - [ ] support SQPoll 
+- [x] batched submission (concurrent submitters share one `io_uring_enter`)
+- [x] direct callback mode (no channel hop)
+- [x] high-performance single-thread event loop `Loop`: multishot recv/accept, provided buffer ring, fixed files, `SINGLE_ISSUER`/`DEFER_TASKRUN`
 
 # OS Requirements
 * Linux Kernel >= 5.6
+* `Loop`: multishot recv needs >= 6.0, provided buffer ring / multishot accept / sparse fixed files need >= 5.19,
+  `SINGLE_ISSUER`+`DEFER_TASKRUN` are used automatically on >= 6.1 (falls back to `COOP_TASKRUN`, then no flags)
+* Go >= 1.18
+
+# Two programming models
+
+## `IOURing`: goroutine-friendly
+
+Any goroutine can submit; results are delivered through a channel (`SubmitRequest(prep, ch)`).
+Concurrent submissions are batched into a single `io_uring_enter`.
+
+**Direct callback mode**: if a request has a callback (`prep.WithCallback(cb)`) and the channel is `nil`,
+the callback runs directly in the ring's completion goroutine. Requests submitted from inside callbacks are
+batched together with waiting for the next completions in one system call. Callbacks must not block and must
+not call `Close`.
+
+## `Loop`: maximum performance for network IO
+
+Each `Loop` owns one io_uring instance and one locked OS thread. All submissions and callbacks happen on that
+thread (lock-free, allocation-free submission path) and every loop iteration issues exactly one
+`io_uring_enter`. Other goroutines hand work to the loop with `Post`.
+
+```golang
+l, _ := iouring.NewLoop(iouring.LoopConfig{
+        BufferRings: []iouring.BufferRingConfig{{Count: 1024, Size: 16 << 10}},
+})
+defer l.Close()
+
+l.Post(func() { // runs on the loop thread
+        br := l.BufferRing(0)
+        var onRecv iouring.Handler
+        onRecv = func(res int32, flags uint32) {
+                if bid, data, ok := br.Get(res, flags); ok {
+                        // data is valid until br.Recycle(bid)
+                        l.Send(fd, data, syscall.MSG_NOSIGNAL, func(int32, uint32) { br.Recycle(bid) })
+                }
+                if flags&iouring_syscall.IORING_CQE_F_MORE == 0 { /* multishot ended: EOF, error or -ENOBUFS */ }
+        }
+        l.RecvMultishot(fd, br, 0, onRecv)
+})
+```
+
+See `bench/loop.go` for a complete TCP forwarding proxy (ordering, short writes, `-ENOBUFS`, connection teardown).
+
+# Testing and benchmarks (Docker, works on macOS)
+
+```
+docker build -f Dockerfile.test -t iouring-go-test .
+docker run --rm --security-opt seccomp=unconfined iouring-go-test                 # tests
+docker run --rm --security-opt seccomp=unconfined --ulimit nofile=65536:65536 \
+        iouring-go-test bench_ab.sh                                               # forwarding benchmark
+```
+`seccomp=unconfined` is required because Docker's default seccomp profile blocks io_uring.
 
 
 # Installation

@@ -8,14 +8,13 @@ go_library(
     name = "iouring-go",
     srcs = [
         "errors.go",
-        "eventfd.go",
         "fixed_buffers.go",
         "fixed_files.go",
         "iouring.go",
         "link_request.go",
+        "loop.go",
         "mmap.go",
         "options.go",
-        "poller.go",
         "prep_request.go",
         "probe.go",
         "request.go",
@@ -41,6 +40,10 @@ go_library(
 
 go_test(
     name = "iouring-go_test",
-    srcs = ["iouring_test.go"],
+    srcs = [
+        "iouring_fix_test.go",
+        "iouring_test.go",
+        "loop_test.go",
+    ],
     embed = [":iouring-go"],
 )

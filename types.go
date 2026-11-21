@@ -148,20 +148,6 @@ type CompletionQueue struct {
 	cqes []iouring_syscall.CompletionQueueEvent
 }
 
-// setEventfdEnabled 开关内核对 eventfd 的通知（IORING_CQ_EVENTFD_DISABLED，5.8+）
-func (queue *CompletionQueue) setEventfdEnabled(enabled bool) {
-	for {
-		old := atomic.LoadUint32(queue.flags)
-		v := old | iouring_syscall.IORING_CQ_EVENTFD_DISABLED
-		if enabled {
-			v = old &^ iouring_syscall.IORING_CQ_EVENTFD_DISABLED
-		}
-		if old == v || atomic.CompareAndSwapUint32(queue.flags, old, v) {
-			return
-		}
-	}
-}
-
 func (queue *CompletionQueue) peek() (cqe *iouring_syscall.CompletionQueueEvent) {
 	head := *queue.head
 	if head != atomic.LoadUint32(queue.tail) {

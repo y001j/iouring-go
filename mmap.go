@@ -20,15 +20,24 @@ var (
 )
 
 func mmapIOURing(iour *IOURing) (err error) {
+	iour.sq, iour.cq, err = mmapRings(iour.fd, iour.params)
+	return err
+}
+
+func munmapIOURing(iour *IOURing) error {
+	return munmapRings(iour.sq, iour.cq)
+}
+
+// mmapRings 映射 io_uring 的 SQ/CQ ring 与 SQE 数组
+func mmapRings(fd int, params *iouring_syscall.IOURingParams) (sq *SubmissionQueue, cq *CompletionQueue, err error) {
+	sq, cq = new(SubmissionQueue), new(CompletionQueue)
 	defer func() {
 		if err != nil {
-			munmapIOURing(iour)
+			munmapRings(sq, cq)
+			sq, cq = nil, nil
 		}
 	}()
-	iour.sq = new(SubmissionQueue)
-	iour.cq = new(CompletionQueue)
 
-	params := iour.params
 	sqSize := params.SQOffset.Array + params.SQEntries*uint32Size
 	cqSize := params.CQOffset.Cqes + params.CQEntries*cqeSize
 
@@ -41,21 +50,21 @@ func mmapIOURing(iour *IOURing) (err error) {
 		cqSize = sqSize
 	}
 
-	if iour.sq.mem, err = mmap(iour.fd, sqSize, iouring_syscall.IORING_OFF_SQ_RING); err != nil {
-		return fmt.Errorf("mmap sq ring: %w", err)
+	if sq.mem, err = mmap(fd, sqSize, iouring_syscall.IORING_OFF_SQ_RING); err != nil {
+		return sq, cq, fmt.Errorf("mmap sq ring: %w", err)
 	}
 	if singleMmap {
-		iour.cq.mem = iour.sq.mem
-	} else if iour.cq.mem, err = mmap(iour.fd, cqSize, iouring_syscall.IORING_OFF_CQ_RING); err != nil {
-		return fmt.Errorf("mmap cq ring: %w", err)
+		cq.mem = sq.mem
+	} else if cq.mem, err = mmap(fd, cqSize, iouring_syscall.IORING_OFF_CQ_RING); err != nil {
+		return sq, cq, fmt.Errorf("mmap cq ring: %w", err)
 	}
-	if iour.sq.sqesMem, err = mmap(iour.fd, params.SQEntries*sqeSize, iouring_syscall.IORING_OFF_SQES); err != nil {
-		return fmt.Errorf("mmap sqe array: %w", err)
+	if sq.sqesMem, err = mmap(fd, params.SQEntries*sqeSize, iouring_syscall.IORING_OFF_SQES); err != nil {
+		return sq, cq, fmt.Errorf("mmap sqe array: %w", err)
 	}
 
-	setupSQ(iour.sq, iour.params)
-	setupCQ(iour.cq, iour.params)
-	return nil
+	setupSQ(sq, params)
+	setupCQ(cq, params)
+	return sq, cq, nil
 }
 
 func u32At(mem []byte, off uint32) *uint32 {
@@ -85,31 +94,31 @@ func setupCQ(cq *CompletionQueue, params *iouring_syscall.IOURingParams) {
 	cq.cqes = unsafe.Slice((*iouring_syscall.CompletionQueueEvent)(unsafe.Pointer(&mem[off.Cqes])), params.CQEntries)
 }
 
-func munmapIOURing(iour *IOURing) error {
-	if iour.sq != nil {
-		if iour.sq.sqesMem != nil {
-			if err := unix.Munmap(iour.sq.sqesMem); err != nil {
+func munmapRings(sq *SubmissionQueue, cq *CompletionQueue) error {
+	if sq != nil {
+		if sq.sqesMem != nil {
+			if err := unix.Munmap(sq.sqesMem); err != nil {
 				return fmt.Errorf("munmap sqe array: %w", err)
 			}
-			iour.sq.sqesMem, iour.sq.sqes = nil, nil
+			sq.sqesMem, sq.sqes = nil, nil
 		}
-		if iour.sq.mem != nil {
-			shared := iour.cq != nil && iour.cq.mem != nil && &iour.cq.mem[0] == &iour.sq.mem[0]
-			if err := unix.Munmap(iour.sq.mem); err != nil {
+		if sq.mem != nil {
+			shared := cq != nil && cq.mem != nil && &cq.mem[0] == &sq.mem[0]
+			if err := unix.Munmap(sq.mem); err != nil {
 				return fmt.Errorf("munmap sq: %w", err)
 			}
-			iour.sq.mem = nil
+			sq.mem = nil
 			if shared {
-				iour.cq.mem = nil
+				cq.mem = nil
 			}
 		}
 	}
 
-	if iour.cq != nil && iour.cq.mem != nil {
-		if err := unix.Munmap(iour.cq.mem); err != nil {
+	if cq != nil && cq.mem != nil {
+		if err := unix.Munmap(cq.mem); err != nil {
 			return fmt.Errorf("munmap cq: %w", err)
 		}
-		iour.cq.mem = nil
+		cq.mem = nil
 	}
 	return nil
 }

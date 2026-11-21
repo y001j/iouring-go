@@ -132,8 +132,11 @@ func (sqe *SubmissionQueueEntry) SetFlags(flags uint8) {
 	sqe.flags |= flags
 }
 
+// CleanFlags 清除指定标志位。
+// 修复：原实现为 sqe.flags ^= flags（异或），对未设置的标志位反而会将其置位，
+// 导致链式请求的最后一个 SQE 被错误地带上 IO_LINK/IO_HARDLINK，与后续无关请求串成链。
 func (sqe *SubmissionQueueEntry) CleanFlags(flags uint8) {
-	sqe.flags ^= flags
+	sqe.flags &^= flags
 }
 
 func (sqe *SubmissionQueueEntry) SetIoprio(ioprio uint16) {
@@ -170,3 +173,35 @@ const (
 	// IORING_CQ_EVENTFD_DISABLED 置位时内核不再向注册的 eventfd 发送通知（5.8）
 	IORING_CQ_EVENTFD_DISABLED uint32 = 1 << iota
 )
+
+// CQE flags
+const (
+	IORING_CQE_F_BUFFER uint32 = 1 << iota // 使用了 provided buffer，buffer id 位于 flags 高 16 位
+	IORING_CQE_F_MORE                      // multishot 请求仍然有效，后续还会产生 CQE
+	IORING_CQE_F_SOCK_NONEMPTY             // socket 中仍有可读数据
+	IORING_CQE_F_NOTIF                     // SEND_ZC 的通知 CQE
+)
+
+const IORING_CQE_BUFFER_SHIFT = 16
+
+// send/recv 的 ioprio 标志
+const (
+	IORING_RECVSEND_POLL_FIRST uint16 = 1 << iota // 先 poll 再发起 IO
+	IORING_RECV_MULTISHOT                         // multishot recv（6.0+），需配合 IOSQE_BUFFER_SELECT
+	IORING_RECVSEND_FIXED_BUF
+)
+
+// accept 的 ioprio 标志
+const IORING_ACCEPT_MULTISHOT uint16 = 1 << 0 // multishot accept（5.19+）
+
+// BufReg 对应内核 struct io_uring_buf_reg，用于 IORING_REGISTER_PBUF_RING
+type BufReg struct {
+	RingAddr    uint64
+	RingEntries uint32
+	Bgid        uint16
+	Flags       uint16
+	Resv        [3]uint64
+}
+
+// 内核 struct io_uring_buf 的大小（addr u64, len u32, bid u16, resv u16）
+const SizeofIOURingBuf = 16
