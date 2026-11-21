@@ -199,6 +199,7 @@ const (
 	IORING_RECV_MULTISHOT                          // multishot recv（6.0+），需配合 IOSQE_BUFFER_SELECT
 	IORING_RECVSEND_FIXED_BUF                      // 使用注册缓冲区，buf_index 为其下标
 	IORING_SEND_ZC_REPORT_USAGE                    // SEND_ZC：通知 CQE 的 res 报告数据是否被拷贝
+	IORING_RECVSEND_BUNDLE                         // 6.10：一次 recv 连续使用 buffer ring 中的多个缓冲区
 )
 
 // IORING_NOTIF_USAGE_ZC_COPIED 在 SEND_ZC 通知 CQE 的 res 中置位，表示数据实际被拷贝（未能零拷贝）

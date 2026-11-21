@@ -36,6 +36,13 @@ const (
 	IORING_FEAT_FAST_POLL
 	IORING_FEAT_POLL_32BITS
 	IORING_FEAT_SQPOLL_NONFIXED
+	IORING_FEAT_EXT_ARG
+	IORING_FEAT_NATIVE_WORKERS
+	IORING_FEAT_RSRC_TAGS
+	IORING_FEAT_CQE_SKIP
+	IORING_FEAT_LINKED_FILE
+	IORING_FEAT_REG_REG_RING
+	IORING_FEAT_RECVSEND_BUNDLE // 6.10：recv/send bundle
 )
 
 // IOURingParams the flags, sq_thread_cpu, sq_thread_idle and WQFd fields are used to configure the io_uring instance

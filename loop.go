@@ -242,6 +242,9 @@ func (l *Loop) armEventfd() {
 	l.efdSlot = l.Read(l.efd, l.efdBuf[:], h)
 }
 
+// Features 返回内核支持的特性（IORING_FEAT_*），例如 IORING_FEAT_RECVSEND_BUNDLE
+func (l *Loop) Features() uint32 { return l.params.Features }
+
 // BufferRing 返回第 i 个（组 ID 为 i）provided buffer ring
 func (l *Loop) BufferRing(i int) *BufferRing { return l.bufRings[i] }
 
@@ -612,6 +615,35 @@ func (l *Loop) RecvMultishot(fd int, br *BufferRing, flags int, h Handler) uint6
 	return ud
 }
 
+// RecvMultishotBundle 与 RecvMultishot 相同，但使用 recv bundle（Linux 6.10+，见 Features 中的
+// IORING_FEAT_RECVSEND_BUNDLE）：一次接收可连续填充 br 中的多个缓冲区，res 为总字节数，
+// 用 br.Bundle(res, flags, dst) 取出本次使用的全部缓冲区。socket 中积压的数据越多，
+// 一个 CQE 携带的数据越多，完成事件与回调次数随之减少。
+func (l *Loop) RecvMultishotBundle(fd int, br *BufferRing, flags int, h Handler) uint64 {
+	sqe := l.getSQE()
+	sqe.PrepOperation(iouring_syscall.IORING_OP_RECV, int32(fd), 0, 0, 0)
+	setFd(sqe, fd)
+	sqe.SetOpFlags(uint32(flags))
+	sqe.SetIoprio(iouring_syscall.IORING_RECV_MULTISHOT | iouring_syscall.IORING_RECVSEND_BUNDLE)
+	sqe.SetFlags(iouring_syscall.IOSQE_FLAGS_BUFFER_SELECT)
+	sqe.SetBufGroup(br.bgid)
+	ud := l.alloc(h, nil)
+	sqe.SetUserData(ud)
+	return ud
+}
+
+// Sendmsg 提交 IORING_OP_SENDMSG，可用 msg 中的 iovec 一次发送多段不连续的内存（聚集发送）。
+// msg、其 iovec 数组以及各段内存都由调用方保证在请求完成前保持存活且不被修改。
+func (l *Loop) Sendmsg(fd int, msg *unix.Msghdr, flags int, h Handler) uint64 {
+	sqe := l.getSQE()
+	sqe.PrepOperation(iouring_syscall.IORING_OP_SENDMSG, int32(fd), uint64(uintptr(unsafe.Pointer(msg))), 1, 0)
+	setFd(sqe, fd)
+	sqe.SetOpFlags(uint32(flags))
+	ud := l.alloc(h, nil)
+	sqe.SetUserData(ud)
+	return ud
+}
+
 // AcceptMultishot 提交 multishot accept（Linux 5.19+）：每接受一个连接产生一个 CQE，res 为新连接 fd
 func (l *Loop) AcceptMultishot(fd int, flags int, h Handler) uint64 {
 	sqe := l.getSQE()
@@ -662,8 +694,10 @@ type BufferRing struct {
 	bgid     uint16
 	mask     uint16
 	size     int
-	ringMem  []byte // count 个 struct io_uring_buf，页对齐
-	bufMem   []byte // count * size 字节的缓冲区
+	ringMem  []byte   // count 个 struct io_uring_buf，页对齐
+	bufMem   []byte   // count * size 字节的缓冲区
+	slots    []uint16 // ring 位置 -> buffer id（bundle 用）
+	pos      []uint16 // buffer id -> 最近一次放入的 ring 位置（tail 计数）
 	tail     uint16
 	dirty    bool
 }
@@ -672,7 +706,8 @@ func newBufferRing(l *Loop, bgid uint16, count, size int) (*BufferRing, error) {
 	if count <= 0 || count > 32768 || count&(count-1) != 0 || size <= 0 {
 		return nil, errors.New("iouring: invalid buffer ring config")
 	}
-	br := &BufferRing{l: l, fixedIdx: -1, bgid: bgid, mask: uint16(count - 1), size: size}
+	br := &BufferRing{l: l, fixedIdx: -1, bgid: bgid, mask: uint16(count - 1), size: size,
+		slots: make([]uint16, count), pos: make([]uint16, count)}
 	var err error
 	prot, flags := unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS|unix.MAP_POPULATE
 	if br.ringMem, err = unix.Mmap(-1, 0, count*iouring_syscall.SizeofIOURingBuf, prot, flags); err != nil {
@@ -726,12 +761,36 @@ func (br *BufferRing) Get(res int32, flags uint32) (bid uint16, data []byte, ok 
 	return bid, br.Buf(bid)[:n], true
 }
 
+// Bundle 取出 recv bundle 的 CQE 使用的全部缓冲区，追加到 dst 并返回。
+// 内核从 CQE 中的第一个缓冲区开始，按 ring 中的顺序连续使用缓冲区，直到放下 res 字节；
+// 除最后一个外，每个缓冲区都被填满（Size 字节）。第 i 个缓冲区的数据为 br.Buf(bids[i])
+// 的前 min(Size, 剩余字节) 字节。CQE 没有占用缓冲区时返回 dst 本身；res <= 0 但占用了
+// 缓冲区时返回该缓冲区，以便归还。
+// 位置由每个缓冲区放入 ring 时记录，不依赖 CQE 的到达顺序。
+func (br *BufferRing) Bundle(res int32, flags uint32, dst []uint16) []uint16 {
+	if flags&iouring_syscall.IORING_CQE_F_BUFFER == 0 {
+		return dst
+	}
+	first := uint16(flags >> iouring_syscall.IORING_CQE_BUFFER_SHIFT)
+	if res <= 0 {
+		return append(dst, first)
+	}
+	p := br.pos[first]
+	for n := int(res); n > 0; n -= br.size {
+		dst = append(dst, br.slots[p&br.mask])
+		p++
+	}
+	return dst
+}
+
 // Recycle 归还缓冲区。归还操作在下一次 io_uring_enter 前批量发布给内核。
 func (br *BufferRing) Recycle(bid uint16) {
 	br.put(bid)
 }
 
 func (br *BufferRing) put(bid uint16) {
+	br.slots[br.tail&br.mask] = bid
+	br.pos[bid] = br.tail
 	e := br.ringMem[int(br.tail&br.mask)*iouring_syscall.SizeofIOURingBuf:]
 	*(*uint64)(unsafe.Pointer(&e[0])) = uint64(uintptr(unsafe.Pointer(&br.bufMem[int(bid)*br.size])))
 	*(*uint32)(unsafe.Pointer(&e[8])) = uint32(br.size)
