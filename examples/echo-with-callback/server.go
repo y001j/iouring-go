@@ -6,7 +6,7 @@ import (
 	"os"
 	"syscall"
 
-	"github.com/iceber/iouring-go"
+	"github.com/y001j/iouring-go"
 )
 
 const readSize = 1024

@@ -1,0 +1,148 @@
+kernel 6.10.14-linuxkit, cpus 12, dur=5s rounds=3
+RESULT	std	c=1	size=128	qps=3325	MB/s=0.4	avg=300µs	p50=199µs	p99=1.661ms	p999=4.06ms	cpu=22	round=1
+RESULT	epoll	c=1	size=128	qps=3694	MB/s=0.5	avg=271µs	p50=185µs	p99=1.3ms	p999=2.271ms	cpu=18	round=1
+RESULT	iouring	c=1	size=128	qps=1848	MB/s=0.2	avg=541µs	p50=409µs	p99=1.977ms	p999=3.335ms	cpu=37	round=1
+RESULT	iouring-direct	c=1	size=128	qps=3641	MB/s=0.4	avg=275µs	p50=186µs	p99=1.504ms	p999=3.307ms	cpu=20	round=1
+RESULT	iouring-loop	c=1	size=128	qps=3925	MB/s=0.5	avg=255µs	p50=179µs	p99=1.256ms	p999=2.197ms	cpu=19	round=1
+RESULT	iouring-loopfixed	c=1	size=128	qps=3809	MB/s=0.5	avg=262µs	p50=174µs	p99=1.572ms	p999=3.773ms	cpu=19	round=1
+RESULT	std	c=64	size=128	qps=68846	MB/s=8.4	avg=930µs	p50=838µs	p99=3.012ms	p999=5.529ms	cpu=109	round=1
+RESULT	epoll	c=64	size=128	qps=90795	MB/s=11.1	avg=705µs	p50=581µs	p99=2.822ms	p999=4.803ms	cpu=109	round=1
+RESULT	iouring	c=64	size=128	qps=33693	MB/s=4.1	avg=1.901ms	p50=1.491ms	p99=5.705ms	p999=7.418ms	cpu=101	round=1
+RESULT	iouring-direct	c=64	size=128	qps=80552	MB/s=9.8	avg=794µs	p50=683µs	p99=2.838ms	p999=5.037ms	cpu=130	round=1
+RESULT	iouring-loop	c=64	size=128	qps=96002	MB/s=11.7	avg=667µs	p50=594µs	p99=2.122ms	p999=3.478ms	cpu=104	round=1
+RESULT	iouring-loopfixed	c=64	size=128	qps=99388	MB/s=12.1	avg=644µs	p50=590µs	p99=1.815ms	p999=2.884ms	cpu=105	round=1
+RESULT	std	c=512	size=128	qps=209186	MB/s=25.5	avg=2.448ms	p50=2.169ms	p99=6.905ms	p999=11.101ms	cpu=269	round=1
+RESULT	epoll	c=512	size=128	qps=250553	MB/s=30.6	avg=2.044ms	p50=1.745ms	p99=7.36ms	p999=21.778ms	cpu=247	round=1
+RESULT	iouring	c=512	size=128	qps=73735	MB/s=9.0	avg=6.943ms	p50=6.617ms	p99=13.979ms	p999=29.006ms	cpu=179	round=1
+RESULT	iouring-direct	c=512	size=128	qps=163950	MB/s=20.0	avg=3.122ms	p50=2.698ms	p99=10.035ms	p999=22.098ms	cpu=257	round=1
+RESULT	iouring-loop	c=512	size=128	qps=245488	MB/s=30.0	avg=2.086ms	p50=1.877ms	p99=5.999ms	p999=9.143ms	cpu=232	round=1
+RESULT	iouring-loopfixed	c=512	size=128	qps=256245	MB/s=31.3	avg=1.998ms	p50=1.804ms	p99=5.715ms	p999=12.26ms	cpu=248	round=1
+RESULT	std	c=1	size=16384	qps=3934	MB/s=61.5	avg=254µs	p50=191µs	p99=1.18ms	p999=2.36ms	cpu=23	round=1
+RESULT	epoll	c=1	size=16384	qps=3877	MB/s=60.6	avg=258µs	p50=193µs	p99=1.132ms	p999=1.744ms	cpu=21	round=1
+RESULT	iouring	c=1	size=16384	qps=1841	MB/s=28.8	avg=543µs	p50=420µs	p99=2.03ms	p999=4.238ms	cpu=39	round=1
+RESULT	iouring-direct	c=1	size=16384	qps=3595	MB/s=56.2	avg=278µs	p50=208µs	p99=1.269ms	p999=2.189ms	cpu=23	round=1
+RESULT	iouring-loop	c=1	size=16384	qps=2941	MB/s=46.0	avg=340µs	p50=241µs	p99=1.604ms	p999=3.177ms	cpu=20	round=1
+RESULT	iouring-loopfixed	c=1	size=16384	qps=3170	MB/s=49.5	avg=315µs	p50=222µs	p99=1.507ms	p999=2.816ms	cpu=21	round=1
+RESULT	std	c=64	size=16384	qps=52787	MB/s=824.8	avg=1.212ms	p50=1.056ms	p99=3.891ms	p999=6.627ms	cpu=113	round=1
+RESULT	epoll	c=64	size=16384	qps=70487	MB/s=1101.4	avg=908µs	p50=720µs	p99=3.685ms	p999=8.239ms	cpu=132	round=1
+RESULT	iouring	c=64	size=16384	qps=24504	MB/s=382.9	avg=2.611ms	p50=2.176ms	p99=9.485ms	p999=16.6ms	cpu=113	round=1
+RESULT	iouring-direct	c=64	size=16384	qps=56880	MB/s=888.8	avg=1.125ms	p50=906µs	p99=4.194ms	p999=9.054ms	cpu=148	round=1
+RESULT	iouring-loop	c=64	size=16384	qps=60121	MB/s=939.4	avg=1.065ms	p50=900µs	p99=3.63ms	p999=6.734ms	cpu=143	round=1
+RESULT	iouring-loopfixed	c=64	size=16384	qps=57462	MB/s=897.8	avg=1.114ms	p50=906µs	p99=4.211ms	p999=6.553ms	cpu=131	round=1
+RESULT	std	c=512	size=16384	qps=121960	MB/s=1905.6	avg=4.157ms	p50=3.691ms	p99=12.428ms	p999=34.142ms	cpu=255	round=1
+RESULT	epoll	c=512	size=16384	qps=123269	MB/s=1926.1	avg=4.151ms	p50=3.392ms	p99=15.624ms	p999=63.763ms	cpu=226	round=1
+RESULT	iouring	c=512	size=16384	qps=48603	MB/s=759.4	avg=10.53ms	p50=9.719ms	p99=28.609ms	p999=82.431ms	cpu=171	round=1
+RESULT	iouring-direct	c=512	size=16384	qps=97065	MB/s=1516.6	avg=5.275ms	p50=4.405ms	p99=21.836ms	p999=46.232ms	cpu=238	round=1
+RESULT	iouring-loop	c=512	size=16384	qps=125352	MB/s=1958.6	avg=4.085ms	p50=3.551ms	p99=12.035ms	p999=33.223ms	cpu=224	round=1
+RESULT	iouring-loopfixed	c=512	size=16384	qps=120008	MB/s=1875.1	avg=4.267ms	p50=3.564ms	p99=18.291ms	p999=39.779ms	cpu=240	round=1
+RESULT	std	c=1	size=128	qps=2481	MB/s=0.3	avg=403µs	p50=236µs	p99=2.455ms	p999=5.589ms	cpu=18	round=2
+RESULT	epoll	c=1	size=128	qps=3555	MB/s=0.4	avg=281µs	p50=166µs	p99=1.857ms	p999=4.799ms	cpu=19	round=2
+RESULT	iouring	c=1	size=128	qps=1802	MB/s=0.2	avg=555µs	p50=343µs	p99=2.795ms	p999=5.24ms	cpu=38	round=2
+RESULT	iouring-direct	c=1	size=128	qps=3516	MB/s=0.4	avg=284µs	p50=170µs	p99=1.793ms	p999=3.434ms	cpu=21	round=2
+RESULT	iouring-loop	c=1	size=128	qps=3846	MB/s=0.5	avg=260µs	p50=132µs	p99=1.948ms	p999=4.052ms	cpu=20	round=2
+RESULT	iouring-loopfixed	c=1	size=128	qps=5465	MB/s=0.7	avg=183µs	p50=128µs	p99=1.024ms	p999=2.808ms	cpu=24	round=2
+RESULT	std	c=64	size=128	qps=60959	MB/s=7.4	avg=1.05ms	p50=854µs	p99=3.819ms	p999=8.002ms	cpu=98	round=2
+RESULT	epoll	c=64	size=128	qps=77145	MB/s=9.4	avg=829µs	p50=579µs	p99=4.626ms	p999=10.931ms	cpu=94	round=2
+RESULT	iouring	c=64	size=128	qps=37316	MB/s=4.6	avg=1.714ms	p50=1.253ms	p99=5.594ms	p999=9.472ms	cpu=102	round=2
+RESULT	iouring-direct	c=64	size=128	qps=81493	MB/s=9.9	avg=785µs	p50=659µs	p99=3.044ms	p999=6.796ms	cpu=131	round=2
+RESULT	iouring-loop	c=64	size=128	qps=97819	MB/s=11.9	avg=654µs	p50=576µs	p99=2.22ms	p999=4.065ms	cpu=97	round=2
+RESULT	iouring-loopfixed	c=64	size=128	qps=97779	MB/s=11.9	avg=654µs	p50=586µs	p99=1.942ms	p999=3.481ms	cpu=102	round=2
+RESULT	std	c=512	size=128	qps=207750	MB/s=25.4	avg=2.464ms	p50=2.206ms	p99=7.18ms	p999=15.79ms	cpu=247	round=2
+RESULT	epoll	c=512	size=128	qps=238182	MB/s=29.1	avg=2.15ms	p50=1.85ms	p99=6.965ms	p999=12.512ms	cpu=218	round=2
+RESULT	iouring	c=512	size=128	qps=80127	MB/s=9.8	avg=6.39ms	p50=6.059ms	p99=13.867ms	p999=19.741ms	cpu=164	round=2
+RESULT	iouring-direct	c=512	size=128	qps=161638	MB/s=19.7	avg=3.167ms	p50=2.612ms	p99=11.895ms	p999=28.522ms	cpu=225	round=2
+RESULT	iouring-loop	c=512	size=128	qps=249816	MB/s=30.5	avg=2.049ms	p50=1.758ms	p99=6.641ms	p999=13.248ms	cpu=207	round=2
+RESULT	iouring-loopfixed	c=512	size=128	qps=181585	MB/s=22.2	avg=2.82ms	p50=2.049ms	p99=14.181ms	p999=96.903ms	cpu=203	round=2
+RESULT	std	c=1	size=16384	qps=2667	MB/s=41.7	avg=375µs	p50=222µs	p99=2.212ms	p999=4.763ms	cpu=19	round=2
+RESULT	epoll	c=1	size=16384	qps=1773	MB/s=27.7	avg=564µs	p50=281µs	p99=3.677ms	p999=5.667ms	cpu=14	round=2
+RESULT	iouring	c=1	size=16384	qps=732	MB/s=11.4	avg=1.366ms	p50=937µs	p99=5.731ms	p999=9.028ms	cpu=22	round=2
+RESULT	iouring-direct	c=1	size=16384	qps=2510	MB/s=39.2	avg=398µs	p50=215µs	p99=2.518ms	p999=5.151ms	cpu=19	round=2
+RESULT	iouring-loop	c=1	size=16384	qps=1359	MB/s=21.2	avg=736µs	p50=323µs	p99=4.97ms	p999=9.233ms	cpu=14	round=2
+RESULT	iouring-loopfixed	c=1	size=16384	qps=1772	MB/s=27.7	avg=564µs	p50=300µs	p99=3.717ms	p999=6.178ms	cpu=17	round=2
+RESULT	std	c=64	size=16384	qps=46647	MB/s=728.9	avg=1.372ms	p50=1.003ms	p99=6.023ms	p999=10.119ms	cpu=95	round=2
+RESULT	epoll	c=64	size=16384	qps=42684	MB/s=666.9	avg=1.5ms	p50=969µs	p99=7.873ms	p999=12.779ms	cpu=82	round=2
+RESULT	iouring	c=64	size=16384	qps=16022	MB/s=250.3	avg=3.997ms	p50=3.624ms	p99=11.263ms	p999=15.06ms	cpu=76	round=2
+RESULT	iouring-direct	c=64	size=16384	qps=40048	MB/s=625.8	avg=1.598ms	p50=1.172ms	p99=6.631ms	p999=15.117ms	cpu=117	round=2
+RESULT	iouring-loop	c=64	size=16384	qps=46967	MB/s=733.9	avg=1.363ms	p50=960µs	p99=6.074ms	p999=11.661ms	cpu=102	round=2
+RESULT	iouring-loopfixed	c=64	size=16384	qps=48194	MB/s=753.0	avg=1.327ms	p50=1.002ms	p99=5.385ms	p999=13.402ms	cpu=112	round=2
+RESULT	std	c=512	size=16384	qps=124281	MB/s=1941.9	avg=4.12ms	p50=3.475ms	p99=16.764ms	p999=40.249ms	cpu=281	round=2
+RESULT	epoll	c=512	size=16384	qps=128649	MB/s=2010.1	avg=3.979ms	p50=3.16ms	p99=18.033ms	p999=48.848ms	cpu=242	round=2
+RESULT	iouring	c=512	size=16384	qps=48159	MB/s=752.5	avg=10.634ms	p50=9.655ms	p99=28.633ms	p999=51.057ms	cpu=207	round=2
+RESULT	iouring-direct	c=512	size=16384	qps=109505	MB/s=1711.0	avg=4.675ms	p50=3.979ms	p99=15.446ms	p999=46.298ms	cpu=273	round=2
+RESULT	iouring-loop	c=512	size=16384	qps=121102	MB/s=1892.2	avg=4.229ms	p50=3.612ms	p99=14.138ms	p999=21.632ms	cpu=239	round=2
+RESULT	iouring-loopfixed	c=512	size=16384	qps=112621	MB/s=1759.7	avg=4.545ms	p50=3.875ms	p99=15.192ms	p999=54.797ms	cpu=243	round=2
+RESULT	std	c=1	size=128	qps=2613	MB/s=0.3	avg=383µs	p50=222µs	p99=2.258ms	p999=4.091ms	cpu=18	round=3
+RESULT	epoll	c=1	size=128	qps=2542	MB/s=0.3	avg=393µs	p50=208µs	p99=2.439ms	p999=4.617ms	cpu=16	round=3
+RESULT	iouring	c=1	size=128	qps=1186	MB/s=0.1	avg=843µs	p50=558µs	p99=4.072ms	p999=8.333ms	cpu=29	round=3
+RESULT	iouring-direct	c=1	size=128	qps=2487	MB/s=0.3	avg=402µs	p50=230µs	p99=2.482ms	p999=5.252ms	cpu=20	round=3
+RESULT	iouring-loop	c=1	size=128	qps=2634	MB/s=0.3	avg=379µs	p50=188µs	p99=2.625ms	p999=5.225ms	cpu=17	round=3
+RESULT	iouring-loopfixed	c=1	size=128	qps=2572	MB/s=0.3	avg=389µs	p50=204µs	p99=2.34ms	p999=4.652ms	cpu=15	round=3
+RESULT	std	c=64	size=128	qps=55791	MB/s=6.8	avg=1.147ms	p50=829µs	p99=4.909ms	p999=10.956ms	cpu=89	round=3
+RESULT	epoll	c=64	size=128	qps=53504	MB/s=6.5	avg=1.197ms	p50=776µs	p99=5.823ms	p999=10.293ms	cpu=71	round=3
+RESULT	iouring	c=64	size=128	qps=23940	MB/s=2.9	avg=2.675ms	p50=2.247ms	p99=8.731ms	p999=11.987ms	cpu=79	round=3
+RESULT	iouring-direct	c=64	size=128	qps=55853	MB/s=6.8	avg=1.146ms	p50=806µs	p99=4.694ms	p999=7.616ms	cpu=107	round=3
+RESULT	iouring-loop	c=64	size=128	qps=54803	MB/s=6.7	avg=1.168ms	p50=769µs	p99=5.414ms	p999=10.154ms	cpu=70	round=3
+RESULT	iouring-loopfixed	c=64	size=128	qps=49199	MB/s=6.0	avg=1.301ms	p50=904µs	p99=5.681ms	p999=10.479ms	cpu=64	round=3
+RESULT	std	c=512	size=128	qps=170697	MB/s=20.8	avg=2.999ms	p50=2.442ms	p99=10.288ms	p999=25.322ms	cpu=234	round=3
+RESULT	epoll	c=512	size=128	qps=194840	MB/s=23.8	avg=2.63ms	p50=2.132ms	p99=9.136ms	p999=15.545ms	cpu=193	round=3
+RESULT	iouring	c=512	size=128	qps=62194	MB/s=7.6	avg=8.234ms	p50=7.67ms	p99=20.294ms	p999=57.401ms	cpu=151	round=3
+RESULT	iouring-direct	c=512	size=128	qps=158617	MB/s=19.4	avg=3.228ms	p50=2.619ms	p99=12.922ms	p999=36.378ms	cpu=222	round=3
+RESULT	iouring-loop	c=512	size=128	qps=206302	MB/s=25.2	avg=2.482ms	p50=2.044ms	p99=9.072ms	p999=19.441ms	cpu=199	round=3
+RESULT	iouring-loopfixed	c=512	size=128	qps=181081	MB/s=22.1	avg=2.826ms	p50=2.331ms	p99=9.814ms	p999=28.009ms	cpu=185	round=3
+RESULT	std	c=1	size=16384	qps=2410	MB/s=37.7	avg=415µs	p50=246µs	p99=2.408ms	p999=5.14ms	cpu=19	round=3
+RESULT	epoll	c=1	size=16384	qps=2739	MB/s=42.8	avg=365µs	p50=200µs	p99=2.224ms	p999=3.884ms	cpu=16	round=3
+RESULT	iouring	c=1	size=16384	qps=1084	MB/s=16.9	avg=923µs	p50=655µs	p99=3.846ms	p999=6.521ms	cpu=27	round=3
+RESULT	iouring-direct	c=1	size=16384	qps=2372	MB/s=37.1	avg=421µs	p50=236µs	p99=2.256ms	p999=4.024ms	cpu=18	round=3
+RESULT	iouring-loop	c=1	size=16384	qps=2279	MB/s=35.6	avg=439µs	p50=239µs	p99=2.629ms	p999=5.702ms	cpu=18	round=3
+RESULT	iouring-loopfixed	c=1	size=16384	qps=2601	MB/s=40.6	avg=384µs	p50=204µs	p99=2.617ms	p999=4.976ms	cpu=20	round=3
+RESULT	std	c=64	size=16384	qps=49139	MB/s=767.8	avg=1.302ms	p50=942µs	p99=5.287ms	p999=8.497ms	cpu=100	round=3
+RESULT	epoll	c=64	size=16384	qps=46259	MB/s=722.8	avg=1.383ms	p50=894µs	p99=6.679ms	p999=14.154ms	cpu=87	round=3
+RESULT	iouring	c=64	size=16384	qps=15919	MB/s=248.7	avg=4.022ms	p50=3.715ms	p99=10.502ms	p999=22.034ms	cpu=84	round=3
+RESULT	iouring-direct	c=64	size=16384	qps=55547	MB/s=867.9	avg=1.153ms	p50=868µs	p99=4.653ms	p999=6.823ms	cpu=132	round=3
+RESULT	iouring-loop	c=64	size=16384	qps=48799	MB/s=762.5	avg=1.312ms	p50=951µs	p99=5.567ms	p999=10.109ms	cpu=113	round=3
+RESULT	iouring-loopfixed	c=64	size=16384	qps=45763	MB/s=715.0	avg=1.399ms	p50=1.029ms	p99=5.589ms	p999=8.178ms	cpu=104	round=3
+RESULT	std	c=512	size=16384	qps=107866	MB/s=1685.4	avg=4.746ms	p50=3.757ms	p99=21.284ms	p999=53.18ms	cpu=272	round=3
+RESULT	epoll	c=512	size=16384	qps=158904	MB/s=2482.9	avg=3.219ms	p50=2.725ms	p99=11.871ms	p999=29.347ms	cpu=244	round=3
+RESULT	iouring	c=512	size=16384	qps=49433	MB/s=772.4	avg=10.352ms	p50=9.744ms	p99=23.526ms	p999=31.606ms	cpu=194	round=3
+RESULT	iouring-direct	c=512	size=16384	qps=109654	MB/s=1713.3	avg=4.671ms	p50=4.002ms	p99=16.589ms	p999=30.85ms	cpu=268	round=3
+RESULT	iouring-loop	c=512	size=16384	qps=129539	MB/s=2024.0	avg=3.952ms	p50=3.309ms	p99=13.504ms	p999=36.477ms	cpu=253	round=3
+RESULT	iouring-loopfixed	c=512	size=16384	qps=134751	MB/s=2105.5	avg=3.799ms	p50=3.332ms	p99=11.897ms	p999=25.707ms	cpu=247	round=3
+
+===== 中位数（3 轮）=====
+proxy              conns  size          qps      MB/s       avg       p99    cpu%
+std                1      128          2613       0.3    383µs   2.258ms      18
+epoll              1      128          3555       0.4    281µs   1.857ms      19
+iouring            1      128          1802       0.2    555µs   2.795ms      38
+iouring-direct     1      128          3516       0.4    284µs   1.793ms      21
+iouring-loop       1      128          3846       0.5    260µs   1.948ms      20
+std                64     128         60959       7.4    1.05ms   3.819ms      98
+epoll              64     128         77145       9.4    829µs   4.626ms      94
+iouring            64     128         33693       4.1   1.901ms   5.705ms     101
+iouring-direct     64     128         80552       9.8    794µs   2.838ms     130
+iouring-loop       64     128         96002      11.7    667µs   2.122ms     104
+std                512    128        207750      25.4   2.464ms    7.18ms     247
+epoll              512    128        238182      29.1    2.15ms   6.965ms     218
+iouring            512    128         73735       9.0   6.943ms  13.979ms     179
+iouring-direct     512    128        161638      19.7   3.167ms  11.895ms     225
+iouring-loop       512    128        245488      30.0   2.086ms   5.999ms     232
+std                1      16384        2667      41.7    375µs   2.212ms      19
+epoll              1      16384        2739      42.8    365µs   2.224ms      16
+iouring            1      16384        1084      16.9    923µs   3.846ms      27
+iouring-direct     1      16384        2510      39.2    398µs   2.518ms      19
+iouring-loop       1      16384        2279      35.6    439µs   2.629ms      18
+std                64     16384       49139     767.8   1.302ms   5.287ms     100
+epoll              64     16384       46259     722.8   1.383ms   6.679ms      87
+iouring            64     16384       16022     250.3   3.997ms  11.263ms      76
+iouring-direct     64     16384       55547     867.9   1.153ms   4.653ms     132
+iouring-loop       64     16384       48799     762.5   1.312ms   5.567ms     113
+std                512    16384      121960    1905.6   4.157ms  12.428ms     255
+epoll              512    16384      128649    2010.1   3.979ms  18.033ms     242
+iouring            512    16384       48603     759.4   10.53ms  28.609ms     171
+iouring-direct     512    16384      109505    1711.0   4.675ms  15.446ms     273
+iouring-loop       512    16384      125352    1958.6   4.085ms  12.035ms     224
+iouring-loopfixed  1      128          3809       0.5    262µs   1.572ms      19
+iouring-loopfixed  1      16384        2601      40.6    384µs   2.617ms      20
+iouring-loopfixed  64     128         97779      11.9    654µs   1.942ms     102
+iouring-loopfixed  64     16384       48194     753.0   1.327ms   5.385ms     112
+iouring-loopfixed  512    128        181585      22.2    2.82ms  14.181ms     203
+iouring-loopfixed  512    16384      120008    1875.1   4.267ms  18.291ms     240

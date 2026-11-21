@@ -8,7 +8,7 @@ import (
 	"sync"
 	"unsafe"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 func (iour *IOURing) GetFixedFileIndex(file *os.File) (int, bool) {

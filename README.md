@@ -22,16 +22,151 @@
 - [ ] set logger
 - [ ] register buffers and IO with buffers
 - [ ] support SQPoll 
+- [x] batched submission (concurrent submitters share one `io_uring_enter`)
+- [x] direct callback mode (no channel hop)
+- [x] high-performance single-thread event loop `Loop`: multishot recv/accept, provided buffer ring, fixed files, `SINGLE_ISSUER`/`DEFER_TASKRUN`
 
 # OS Requirements
 * Linux Kernel >= 5.6
+* `Loop`: multishot recv needs >= 6.0, provided buffer ring / multishot accept / sparse fixed files need >= 5.19,
+  `SINGLE_ISSUER`+`DEFER_TASKRUN` are used automatically on >= 6.1 (falls back to `COOP_TASKRUN`, then no flags)
+* Go >= 1.18
 
+# Two programming models
+
+## `IOURing`: goroutine-friendly
+
+Any goroutine can submit; results are delivered through a channel (`SubmitRequest(prep, ch)`).
+Concurrent submissions are batched into a single `io_uring_enter`.
+
+**Direct callback mode**: if a request has a callback (`prep.WithCallback(cb)`) and the channel is `nil`,
+the callback runs directly in the ring's completion goroutine. Requests submitted from inside callbacks are
+batched together with waiting for the next completions in one system call. Callbacks must not block and must
+not call `Close`.
+
+## `Loop`: maximum performance for network IO
+
+Each `Loop` owns one io_uring instance and one locked OS thread. All submissions and callbacks happen on that
+thread (lock-free, allocation-free submission path) and every loop iteration issues exactly one
+`io_uring_enter`. Other goroutines hand work to the loop with `Post`.
+
+```golang
+l, _ := iouring.NewLoop(iouring.LoopConfig{
+        BufferRings: []iouring.BufferRingConfig{{Count: 1024, Size: 16 << 10}},
+})
+defer l.Close()
+
+l.Post(func() { // runs on the loop thread
+        br := l.BufferRing(0)
+        var onRecv iouring.Handler
+        onRecv = func(res int32, flags uint32) {
+                if bid, data, ok := br.Get(res, flags); ok {
+                        // data is valid until br.Recycle(bid)
+                        l.Send(fd, data, syscall.MSG_NOSIGNAL, func(int32, uint32) { br.Recycle(bid) })
+                }
+                if flags&iouring_syscall.IORING_CQE_F_MORE == 0 { /* multishot ended: EOF, error or -ENOBUFS */ }
+        }
+        l.RecvMultishot(fd, br, 0, onRecv)
+})
+```
+
+See `bench/loop.go` for a complete TCP forwarding proxy (ordering, short writes, `-ENOBUFS`, connection teardown).
+
+# Testing and benchmarks (Docker, works on macOS)
+
+```
+docker build -f Dockerfile.test -t iouring-go-test .
+docker run --rm --security-opt seccomp=unconfined iouring-go-test                 # tests
+docker run --rm --security-opt seccomp=unconfined --ulimit nofile=65536:65536 \
+        iouring-go-test bench_ab.sh                                               # forwarding benchmark
+```
+`seccomp=unconfined` is required because Docker's default seccomp profile blocks io_uring.
+
+
+# 性能测试（TCP 转发）
+
+## 测试方法
+
+客户端 → 转发代理 → 后端 echo 服务，客户端在 C 个长连接上 ping-pong（写 N 字节、读回 N 字节）。
+代理、后端、压测客户端分别绑定 CPU 0-3 / 4-7 / 8-11（各 `GOMAXPROCS=4`），走本机回环。
+所有代理同时启动、每个场景下轮流压测，重复 3 轮取中位数（`scripts/bench_ab.sh`），以抵消环境波动。
+
+| 代理 | 实现 |
+|---|---|
+| std | Go 标准库 `net` + `io.CopyBuffer`（底层 epoll netpoller） |
+| epoll | 手写 epoll 事件循环，4 个 loop 各绑定一个 OS 线程 |
+| iouring | 本库 `IOURing`，结果经 channel 投递给 4 个 worker goroutine |
+| iouring-direct | 本库 `IOURing` 直接回调模式（channel 为 nil） |
+| iouring-loop | 本库 `Loop`：4 个 Loop + multishot recv + provided buffer ring |
+
+环境：Docker Desktop（macOS, Apple Silicon）Linux VM，内核 6.10.14，12 核，Go 1.22。原始数据见 `bench/RESULTS.txt`。
+
+## 结果
+
+128 字节（QPS）：
+
+| 连接数 | std | epoll | iouring | iouring-direct | **iouring-loop** |
+|---|---|---|---|---|---|
+| 1 | 2,613 | 3,555 | 1,802 | 3,516 | **3,846** |
+| 64 | 60,959 | 77,145 | 33,693 | 80,552 | **96,002** |
+| 512 | 207,750 | 238,182 | 73,735 | 161,638 | **245,488** |
+
+16KB（吞吐）：
+
+| 连接数 | std | epoll | iouring | iouring-direct | iouring-loop |
+|---|---|---|---|---|---|
+| 1 | 41.7 MB/s | 42.8 MB/s | 16.9 MB/s | 39.2 MB/s | 35.6 MB/s |
+| 64 | 768 MB/s | 723 MB/s | 250 MB/s | **868 MB/s** | 763 MB/s |
+| 512 | 1,906 MB/s | **2,010 MB/s** | 759 MB/s | 1,711 MB/s | 1,959 MB/s |
+
+p99 延迟：c=64/128B 时 iouring-loop 为 2.1ms（epoll 4.6ms）；c=512/16KB 时为 12.0ms（epoll 18.0ms）。
+
+优化过程（c=512, 128B）：
+
+| 阶段 | QPS | 相对 std |
+|---|---|---|
+| 优化前 | 54k | 0.29x |
+| 批量提交 | 104k | 0.5x |
+| 直接回调 + 完成路径改造 | 162k | 0.78x |
+| Loop + multishot recv + provided buffer | 245k | 1.18x |
+
+说明：
+- 优化后 iouring-loop 的 CPU profile 中约 94% 时间在内核（TCP 收发），用户态开销已很小。
+- c=1 场景波动较大，仅供参考；回环网络下的结果不代表真实网卡，部署前建议在目标机器上运行 `bench_ab.sh`。
+- `LoopConfig.FixedFiles`（注册文件）在本测试中未带来收益（c=512/128B 时反而下降），默认不启用。
+
+# 更新记录
+
+## 正确性修复
+- `Send`/`Recv` 未设置结果解析，`Err()` 恒为 nil、`ReturnInt()` 恒报错
+- `New()` 初始化失败时 `Close()` 永久阻塞
+- `Close()` 后在途请求永远不完成，现以 `ErrIOURingClosed` 结束
+- 单个消费慢的 channel 阻塞完成 goroutine，拖住所有请求（队头阻塞）
+- `Cancel()` 与请求完成之间的数据竞争
+- `SubmissionQueueEntry.CleanFlags` 使用异或：链式请求最后一个 SQE 被错误地带上 `IO_LINK`，与后续无关请求串成链
+- SQPOLL 唤醒误用 `IORING_SQ_NEED_WAKEUP`（应为 `IORING_ENTER_SQ_WAKEUP`）
+- `go:linkname` 引用 `syscall` 内部符号，Go 1.23+ 无法链接
+- import 路径统一为 `github.com/y001j/iouring-go`；ring 改用 `unix.Mmap` + `unsafe.Slice`（`go vet` 无警告），修正 CQ 大小计算
+- 对未完成的请求调用 `Callback()` 返回 `ErrRequestNotCompleted`
+
+## 性能改进
+- 合并提交：并发提交的请求合并为一次 `io_uring_enter`，系统调用不再持锁
+- 完成路径：去掉 eventfd 与全局 epoll goroutine，完成 goroutine 直接阻塞在 `io_uring_enter(GETEVENTS)` 中；批量收割 CQE
+- 直接回调模式：回调中提交的请求与等待下一批完成事件合并为一次系统调用
+- 新增 `Loop` API：单线程事件循环、multishot recv/accept、provided buffer ring、`SINGLE_ISSUER`/`DEFER_TASKRUN`、注册文件
+- 新增 `WithCoopTaskRun()` 选项
+
+## 行为变化
+- 最低 Go 版本 1.18
+- `SubmitRequest` 返回时，请求可能已由其他 goroutine 代为提交
+- channel 已满时结果改由新 goroutine 投递，同一 channel 内的顺序可能与完成顺序不一致
+- 带回调且 channel 为 nil 的请求，回调会在完成 goroutine 中直接执行（回调不能阻塞，也不能调用 `Close`）
 
 # Installation
 ```
-go get github.com/iceber/iouring-go
+go get github.com/y001j/iouring-go
 ```
-[doc](https://pkg.go.dev/github.com/iceber/iouring-go)
+[doc](https://pkg.go.dev/github.com/y001j/iouring-go)
 
 # Quickstart
 ```golang
@@ -41,7 +176,7 @@ import (
         "fmt"
         "os"
 
-        "github.com/iceber/iouring-go"
+        "github.com/y001j/iouring-go"
 )
 
 var str = "io with iouring"

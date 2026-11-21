@@ -1,0 +1,24 @@
+# 用于在 Linux 容器中测试 iouring-go（宿主机 macOS 不支持 io_uring）
+#
+# 构建: docker build -f Dockerfile.test -t iouring-go-test .
+# 运行: docker run --rm --security-opt seccomp=unconfined iouring-go-test
+# 压测: docker run --rm --security-opt seccomp=unconfined iouring-go-test bench.sh
+#
+# 注意：Docker 默认的 seccomp 策略会拦截 io_uring 系统调用，必须加 seccomp=unconfined。
+FROM golang:1.22-bookworm
+# 修复 go:linkname 后也可用更新的 Go 版本（>=1.23）构建
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+
+RUN go vet . ./syscall \
+ && go build . ./syscall \
+ && go test -c -o /usr/local/bin/iouring.test . \
+ && go build -o /usr/local/bin/echo-server ./examples/echo/server.go \
+ && go build -o /usr/local/bin/echo-client ./examples/echo/client.go \
+ && go build -o /usr/local/bin/iouring-bench ./bench
+
+COPY scripts/container-test.sh scripts/bench.sh scripts/bench_ab.sh scripts/profile.sh /usr/local/bin/
+CMD ["/usr/local/bin/container-test.sh"]
