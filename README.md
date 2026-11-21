@@ -90,6 +90,14 @@ This pays off where wake-ups are expensive (VMs, low-concurrency request/respons
   transmits from it in place. Forwarding or echo then needs no user-space copy, and on a real NIC no kernel copy on transmit either.
 - `IORING_SEND_ZC_REPORT_USAGE` makes the notification report whether data was copied (`res & IORING_NOTIF_USAGE_ZC_COPIED`).
 
+### Recv bundles and gather sends
+
+- `RecvMultishotBundle(fd, br, flags, h)` (6.10+, check `l.Features() & IORING_FEAT_RECVSEND_BUNDLE`): one completion can fill
+  several consecutive ring buffers. Use `br.Bundle(res, flags, dst)` to get every buffer and its data.
+  **Kernels before 6.16 can leave gaps in the received data** (fixed upstream by `3a08988123c8`, `26ec15e4b0c1`, `178b8ff66ff8`),
+  so only use bundles on 6.16+ or on kernels that carry those fixes.
+- `Sendmsg(fd, msg, flags, h)`: `IORING_OP_SENDMSG` for sending several non-contiguous buffers in one request.
+
 Caveats (from the kernel docs): zero copy only pays off above roughly 10KB per send; **traffic looped to a local socket
 is always copied** (no gain on loopback or between containers on one host); registered buffers count against
 `RLIMIT_MEMLOCK` (`ulimit -l`), and `NewLoop` returns `ENOMEM` when it is too low.
@@ -184,6 +192,7 @@ p99 延迟：c=64/128B 时 iouring-loop 为 2.1ms（epoll 4.6ms）；c=512/16KB 
 - `LoopConfig.SpinTime`：阻塞前忙轮询，降低唤醒延迟
 - `Loop.SendZC` / `SendZCFixed`：IORING_OP_SEND_ZC 零拷贝发送，处理结果 CQE 与通知 CQE
 - `LoopConfig.FixedBuffers`、`BufferRingConfig.Fixed`：注册固定缓冲区；buffer ring 注册后接收与零拷贝发送共用同一块内存
+- `Loop.RecvMultishotBundle`、`BufferRing.Bundle`、`Loop.Sendmsg`、`Loop.Features`：recv bundle（6.16 之前的内核有数据空洞 bug）与聚集发送
 - 补充 opcode 常量（至 `IORING_OP_SENDMSG_ZC`）与 `IORING_SEND_ZC_REPORT_USAGE`、`IORING_NOTIF_USAGE_ZC_COPIED`
 
 ## 行为变化
