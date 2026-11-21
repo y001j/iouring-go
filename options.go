@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package iouring
@@ -5,7 +6,7 @@ package iouring
 import (
 	"time"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 type IOURingOption func(*IOURing)
@@ -83,5 +84,14 @@ func WithDisableRing() IOURingOption {
 func WithDrain() IOURingOption {
 	return func(iour *IOURing) {
 		iour.drain = true
+	}
+}
+
+// WithCoopTaskRun 设置 IORING_SETUP_COOP_TASKRUN（需要 Linux 5.19+）。
+// 异步完成的请求不再通过 IPI 中断提交线程，而是在下一次进入内核时处理，
+// 适合网络 IO 这类大量异步完成的场景。内核不支持时 New 会返回 EINVAL。
+func WithCoopTaskRun() IOURingOption {
+	return func(iour *IOURing) {
+		iour.params.Flags |= iouring_syscall.IORING_SETUP_COOP_TASKRUN
 	}
 }

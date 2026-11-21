@@ -62,6 +62,7 @@ const (
 const (
 	IORING_SQ_NEED_WAKEUP uint32 = 1 << iota
 	IORING_SQ_CQ_OVERFLOW
+	IORING_SQ_TASKRUN
 )
 
 const (
@@ -163,3 +164,9 @@ type CompletionQueueEvent struct {
 
 const IORING_FSYNC_DATASYNC uint32 = 1
 const IORING_TIMEOUT_ABS uint32 = 1
+
+// CQ ring flags
+const (
+	// IORING_CQ_EVENTFD_DISABLED 置位时内核不再向注册的 eventfd 发送通知（5.8）
+	IORING_CQ_EVENTFD_DISABLED uint32 = 1 << iota
+)

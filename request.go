@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"syscall"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 type ResultResolver func(req Request)
@@ -94,13 +94,26 @@ func (req *request) resolve() {
 }
 
 func (req *request) complate(cqe *iouring_syscall.CompletionQueueEvent) {
+	// 注意：不再把 req.iour 置为 nil。Cancel() 可能在其他 goroutine 中并发读取它，
+	// 置 nil 会产生数据竞争；对已完成请求调用 Cancel 会先被 isDone() 拦截。
 	req.res = cqe.Result
-	req.iour = nil
+	req.finish()
+}
+
+// fail 在请求无法正常完成时（例如 IOURing 已关闭）以 err 结束请求
+func (req *request) fail(err error) {
+	req.res = -int32(syscall.ECANCELED)
+	req.resolver = nil
+	req.err = err
+	req.finish()
+}
+
+func (req *request) finish() {
 	close(req.done)
 
-	if req.set != nil {
-		req.set.complateOne()
+	if set := req.set; set != nil {
 		req.set = nil
+		set.complateOne()
 	}
 }
 
@@ -115,7 +128,7 @@ func (req *request) isDone() bool {
 
 func (req *request) Callback() error {
 	if !req.isDone() {
-		return ErrRequestCompleted
+		return ErrRequestNotCompleted
 	}
 
 	if req.callback == nil {

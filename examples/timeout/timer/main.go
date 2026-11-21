@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/iceber/iouring-go"
+	"github.com/y001j/iouring-go"
 )
 
 func main() {

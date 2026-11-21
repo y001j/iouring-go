@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/iceber/iouring-go"
+	"github.com/y001j/iouring-go"
 )
 
 func main() {

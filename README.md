@@ -29,9 +29,9 @@
 
 # Installation
 ```
-go get github.com/iceber/iouring-go
+go get github.com/y001j/iouring-go
 ```
-[doc](https://pkg.go.dev/github.com/iceber/iouring-go)
+[doc](https://pkg.go.dev/github.com/y001j/iouring-go)
 
 # Quickstart
 ```golang
@@ -41,7 +41,7 @@ import (
         "fmt"
         "os"
 
-        "github.com/iceber/iouring-go"
+        "github.com/y001j/iouring-go"
 )
 
 var str = "io with iouring"

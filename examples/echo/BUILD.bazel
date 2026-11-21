@@ -6,7 +6,7 @@ go_library(
         "client.go",
         "server.go",
     ],
-    importpath = "github.com/iceber/iouring-go/examples/echo",
+    importpath = "github.com/y001j/iouring-go/examples/echo",
     visibility = ["//visibility:private"],
     deps = ["//:iouring-go"],
 )

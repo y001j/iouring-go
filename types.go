@@ -6,7 +6,7 @@ package iouring
 import (
 	"sync/atomic"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 // iouring operations
@@ -68,8 +68,8 @@ const (
 var _zero uintptr
 
 type SubmissionQueue struct {
-	ptr  uintptr
-	size uint32
+	mem     []byte // mmap 的 SQ ring
+	sqesMem []byte // mmap 的 SQE 数组
 
 	head    *uint32
 	tail    *uint32
@@ -98,6 +98,13 @@ func (queue *SubmissionQueue) getSQEntry() *iouring_syscall.SubmissionQueueEntry
 	return nil
 }
 
+// free 返回 SQ 中尚可填充的 SQE 数量
+func (queue *SubmissionQueue) free() uint32 {
+	return *queue.entries - (queue.sqeTail - atomic.LoadUint32(queue.head))
+}
+
+func atomicLoad(p *uint32) uint32 { return atomic.LoadUint32(p) }
+
 func (queue *SubmissionQueue) fallback(i uint32) {
 	queue.sqeTail -= i
 }
@@ -114,7 +121,7 @@ func (queue *SubmissionQueue) needWakeup() bool {
 // return the number of pending items in the SQ ring, for the shared ring.
 func (queue *SubmissionQueue) flush() int {
 	if queue.sqeHead == queue.sqeTail {
-		return int(*queue.tail - *queue.head)
+		return int(*queue.tail - atomic.LoadUint32(queue.head))
 	}
 
 	tail := *queue.tail
@@ -125,12 +132,11 @@ func (queue *SubmissionQueue) flush() int {
 	}
 
 	atomic.StoreUint32(queue.tail, tail)
-	return int(tail - *queue.head)
+	return int(tail - atomic.LoadUint32(queue.head))
 }
 
 type CompletionQueue struct {
-	ptr  uintptr
-	size uint32
+	mem []byte // mmap 的 CQ ring（SINGLE_MMAP 时与 SQ 共享）
 
 	head     *uint32
 	tail     *uint32
@@ -140,6 +146,20 @@ type CompletionQueue struct {
 	overflow *uint32
 
 	cqes []iouring_syscall.CompletionQueueEvent
+}
+
+// setEventfdEnabled 开关内核对 eventfd 的通知（IORING_CQ_EVENTFD_DISABLED，5.8+）
+func (queue *CompletionQueue) setEventfdEnabled(enabled bool) {
+	for {
+		old := atomic.LoadUint32(queue.flags)
+		v := old | iouring_syscall.IORING_CQ_EVENTFD_DISABLED
+		if enabled {
+			v = old &^ iouring_syscall.IORING_CQ_EVENTFD_DISABLED
+		}
+		if old == v || atomic.CompareAndSwapUint32(queue.flags, old, v) {
+			return
+		}
+	}
 }
 
 func (queue *CompletionQueue) peek() (cqe *iouring_syscall.CompletionQueueEvent) {

@@ -6,7 +6,7 @@ import (
 	"errors"
 	"unsafe"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 func (iour *IOURing) RegisterBuffers(bs [][]byte) error {

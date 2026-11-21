@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package iouring
@@ -69,6 +70,9 @@ func registerIOURing(iour *IOURing) error {
 }
 
 func removeIOURing(iour *IOURing) error {
+	if poller == nil {
+		return nil
+	}
 	poller.Lock()
 	delete(poller.iours, iour.eventfd)
 	poller.Unlock()

@@ -11,7 +11,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 type PrepRequest func(sqe *iouring_syscall.SubmissionQueueEntry, userData *UserData)
@@ -272,6 +272,7 @@ func Send(sockfd int, b []byte, flags int) PrepRequest {
 	}
 
 	return func(sqe *iouring_syscall.SubmissionQueueEntry, userData *UserData) {
+		userData.request.resolver = fdResolver
 		userData.SetRequestBuffer(b, nil)
 
 		sqe.PrepOperation(
@@ -294,6 +295,7 @@ func Recv(sockfd int, b []byte, flags int) PrepRequest {
 	}
 
 	return func(sqe *iouring_syscall.SubmissionQueueEntry, userData *UserData) {
+		userData.request.resolver = fdResolver
 		userData.SetRequestBuffer(b, nil)
 
 		sqe.PrepOperation(
@@ -501,7 +503,7 @@ func Connect(sockfd int, sa syscall.Sockaddr) (PrepRequest, error) {
 	}
 
 	return func(sqe *iouring_syscall.SubmissionQueueEntry, userData *UserData) {
-		userData.hold(sa)
+		userData.hold(sa, ptr)
 		userData.request.resolver = errResolver
 
 		sqe.PrepOperation(

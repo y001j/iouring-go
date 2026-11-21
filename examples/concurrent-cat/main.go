@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/iceber/iouring-go"
+	"github.com/y001j/iouring-go"
 )
 
 var blockSize int64 = 32 * 1024

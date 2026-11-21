@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
 
 func (iour *IOURing) registerEventfd() error {

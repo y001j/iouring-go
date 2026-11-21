@@ -5,7 +5,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/iceber/iouring-go"
+	"github.com/y001j/iouring-go"
 )
 
 const entries uint = 64

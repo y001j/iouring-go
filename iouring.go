@@ -1,3 +1,4 @@
+//go:build linux
 // +build linux
 
 package iouring
@@ -10,8 +11,11 @@ import (
 	"sync"
 	"syscall"
 
-	iouring_syscall "github.com/iceber/iouring-go/syscall"
+	iouring_syscall "github.com/y001j/iouring-go/syscall"
 )
+
+// 一次从 CQ 中批量取出的最大 CQE 数
+const reapBatch = 256
 
 // IOURing contains iouring_syscall submission and completion queue.
 // It's safe for concurrent use by multiple goroutines.
@@ -30,16 +34,26 @@ type IOURing struct {
 	Flags    uint32
 	Features uint32
 
+	// submitLock 保护 SQE 的填充、SQ tail 的发布以及 flushing 标志。
+	// io_uring_enter 系统调用在锁外执行（见 submitLocked）。
 	submitLock sync.Mutex
+	// flushing 为 true 表示有一个 goroutine 正在负责调用 io_uring_enter，
+	// 其他 goroutine 只需把 SQE 发布到 SQ 即可返回，由它统一批量提交。
+	flushing bool
 
 	userDataLock sync.RWMutex
 	userDatas    map[uint64]*UserData
 
 	fileRegister FileRegister
 
-	fdclosed bool
-	closer   chan struct{}
-	closed   chan struct{}
+	// cqFlags 为 true 表示内核支持 CQ ring flags（5.8+），可在繁忙时关闭 eventfd 通知
+	cqFlags bool
+
+	registered bool // eventfd 是否已注册到全局 poller
+	running    bool // run goroutine 是否已启动
+	fdclosed   bool
+	closer     chan struct{}
+	closed     chan struct{}
 }
 
 // New return a IOURing instance by IOURingOptions
@@ -50,6 +64,7 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 		cqeSign:   make(chan struct{}, 1),
 		closer:    make(chan struct{}),
 		closed:    make(chan struct{}),
+		eventfd:   -1,
 	}
 
 	for _, opt := range opts {
@@ -63,7 +78,7 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 	}
 
 	if err := mmapIOURing(iour); err != nil {
-		munmapIOURing(iour)
+		syscall.Close(iour.fd)
 		return nil, err
 	}
 
@@ -73,7 +88,11 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 	}
 	iour.Flags = iour.params.Flags
 	iour.Features = iour.params.Features
+	// 旧内核没有 CQOffset.Flags（为 0），此时不能写 cq.flags
+	iour.cqFlags = iour.params.CQOffset.Flags != 0
 
+	// 以下失败路径调用 Close() 时 run goroutine 尚未启动，
+	// Close 依据 running/registered 标志跳过对应的清理步骤，避免永久阻塞。
 	if err := iour.registerEventfd(); err != nil {
 		iour.Close()
 		return nil, err
@@ -83,7 +102,9 @@ func New(entries uint, opts ...IOURingOption) (*IOURing, error) {
 		iour.Close()
 		return nil, err
 	}
+	iour.registered = true
 
+	iour.running = true
 	go iour.run()
 	return iour, nil
 }
@@ -94,6 +115,9 @@ func (iour *IOURing) Size() int {
 }
 
 // Close IOURing
+//
+// 关闭后，所有尚未完成的请求都会以 ErrIOURingClosed 结束（Done() 被关闭，
+// 并照常投递到各自的 resulter channel）。
 func (iour *IOURing) Close() error {
 	iour.submitLock.Lock()
 	defer iour.submitLock.Unlock()
@@ -104,20 +128,29 @@ func (iour *IOURing) Close() error {
 		close(iour.closer)
 	}
 
-	if iour.eventfd > 0 {
+	// 等待正在执行 io_uring_enter 的 goroutine 退出，避免其在 munmap 之后访问 SQ
+	for iour.flushing {
+		iour.submitLock.Unlock()
+		runtime.Gosched()
+		iour.submitLock.Lock()
+	}
+
+	if iour.registered {
 		if err := removeIOURing(iour); err != nil {
 			return err
 		}
+		iour.registered = false
+	}
+	if iour.eventfd >= 0 {
 		syscall.Close(iour.eventfd)
 		iour.eventfd = -1
 	}
 
-	<-iour.closed
-
-	if err := munmapIOURing(iour); err != nil {
-		return err
+	if iour.running {
+		<-iour.closed
 	}
 
+	// 先关闭 ring fd：内核会取消所有在途请求
 	if !iour.fdclosed {
 		if err := syscall.Close(iour.fd); err != nil {
 			return os.NewSyscallError("close", err)
@@ -125,7 +158,28 @@ func (iour *IOURing) Close() error {
 		iour.fdclosed = true
 	}
 
+	if err := munmapIOURing(iour); err != nil {
+		return err
+	}
+
+	iour.failPending(ErrIOURingClosed)
 	return nil
+}
+
+// failPending 让所有尚未完成的请求以 err 结束
+func (iour *IOURing) failPending(err error) {
+	iour.userDataLock.Lock()
+	pending := iour.userDatas
+	iour.userDatas = make(map[uint64]*UserData)
+	iour.userDataLock.Unlock()
+
+	for _, userData := range pending {
+		userData.request.fail(err)
+		if userData.opcode == iouring_syscall.IORING_OP_LINK_TIMEOUT {
+			continue
+		}
+		deliver(userData.resulter, userData.request)
+	}
 }
 
 // IsClosed IOURing is closed
@@ -138,13 +192,27 @@ func (iour *IOURing) IsClosed() (closed bool) {
 	return
 }
 
-func (iour *IOURing) getSQEntry() *iouring_syscall.SubmissionQueueEntry {
+// reserve 确保 SQ 中至少有 n 个空闲 SQE，调用方需持有 submitLock。
+// SQ 已满时驱动一次提交（或等待当前的提交者），而不是持锁自旋导致死锁。
+func (iour *IOURing) reserve(n uint32) error {
 	for {
-		sqe := iour.sq.getSQEntry()
-		if sqe != nil {
-			return sqe
+		if iour.IsClosed() {
+			return ErrIOURingClosed
 		}
+		if iour.sq.free() >= n {
+			return nil
+		}
+		if !iour.flushing {
+			if err := iour.submitLocked(); err != nil {
+				return err
+			}
+			if iour.sq.free() >= n {
+				return nil
+			}
+		}
+		iour.submitLock.Unlock()
 		runtime.Gosched()
+		iour.submitLock.Lock()
 	}
 }
 
@@ -186,15 +254,18 @@ func (iour *IOURing) doRequest(sqe *iouring_syscall.SubmissionQueueEntry, reques
 
 // SubmitRequest by Request function and io result is notified via channel
 // return request id, can be used to cancel a request
+//
+// 并发调用时多个请求会被合并到同一次 io_uring_enter 中提交，
+// 因此返回时请求可能已由其他 goroutine 代为提交。
 func (iour *IOURing) SubmitRequest(request PrepRequest, ch chan<- Result) (Request, error) {
 	iour.submitLock.Lock()
 	defer iour.submitLock.Unlock()
 
-	if iour.IsClosed() {
-		return nil, ErrIOURingClosed
+	if err := iour.reserve(1); err != nil {
+		return nil, err
 	}
 
-	sqe := iour.getSQEntry()
+	sqe := iour.sq.getSQEntry()
 	userData, err := iour.doRequest(sqe, request, ch)
 	if err != nil {
 		iour.sq.fallback(1)
@@ -205,7 +276,7 @@ func (iour *IOURing) SubmitRequest(request PrepRequest, ch chan<- Result) (Reque
 	iour.userDatas[userData.id] = userData
 	iour.userDataLock.Unlock()
 
-	if _, err = iour.submit(); err != nil {
+	if err = iour.submitLocked(); err != nil {
 		iour.userDataLock.Lock()
 		delete(iour.userDatas, userData.id)
 		iour.userDataLock.Unlock()
@@ -217,6 +288,11 @@ func (iour *IOURing) SubmitRequest(request PrepRequest, ch chan<- Result) (Reque
 
 // SubmitRequests by Request functions and io results are notified via channel
 func (iour *IOURing) SubmitRequests(requests []PrepRequest, ch chan<- Result) (RequestSet, error) {
+	return iour.submitRequests(requests, ch, 0)
+}
+
+// submitRequests 提交一组请求；linkFlags 非 0 时将它们串成链（最后一个不带 link 标志）
+func (iour *IOURing) submitRequests(requests []PrepRequest, ch chan<- Result, linkFlags uint8) (RequestSet, error) {
 	// TODO(iceber): no length limit
 	if len(requests) > int(*iour.sq.entries) {
 		return nil, errors.New("too many requests")
@@ -225,14 +301,15 @@ func (iour *IOURing) SubmitRequests(requests []PrepRequest, ch chan<- Result) (R
 	iour.submitLock.Lock()
 	defer iour.submitLock.Unlock()
 
-	if iour.IsClosed() {
-		return nil, ErrIOURingClosed
+	// 一次性预留全部 SQE，保证同一组（尤其是链式）请求不会被拆到两次提交中
+	if err := iour.reserve(uint32(len(requests))); err != nil {
+		return nil, err
 	}
 
 	var sqeN uint32
 	userDatas := make([]*UserData, 0, len(requests))
-	for _, request := range requests {
-		sqe := iour.getSQEntry()
+	for i, request := range requests {
+		sqe := iour.sq.getSQEntry()
 		sqeN++
 
 		userData, err := iour.doRequest(sqe, request, ch)
@@ -241,6 +318,13 @@ func (iour *IOURing) SubmitRequests(requests []PrepRequest, ch chan<- Result) (R
 			return nil, err
 		}
 		userDatas = append(userDatas, userData)
+
+		if linkFlags != 0 {
+			sqe.CleanFlags(iouring_syscall.IOSQE_FLAGS_IO_HARDLINK | iouring_syscall.IOSQE_FLAGS_IO_LINK)
+			if i < len(requests)-1 {
+				sqe.SetFlags(linkFlags)
+			}
+		}
 	}
 
 	// must be located before the lock operation to
@@ -254,7 +338,7 @@ func (iour *IOURing) SubmitRequests(requests []PrepRequest, ch chan<- Result) (R
 	}
 	iour.userDataLock.Unlock()
 
-	if _, err := iour.submit(); err != nil {
+	if err := iour.submitLocked(); err != nil {
 		iour.userDataLock.Lock()
 		for _, data := range userDatas {
 			delete(iour.userDatas, data.id)
@@ -273,117 +357,193 @@ func (iour *IOURing) needEnter(flags *uint32) bool {
 	}
 
 	if iour.sq.needWakeup() {
-		*flags |= iouring_syscall.IORING_SQ_NEED_WAKEUP
+		// 修复：此处应传入 io_uring_enter 的 IORING_ENTER_SQ_WAKEUP，
+		// 原代码误用了 SQ ring 标志 IORING_SQ_NEED_WAKEUP（值为 1，等同于 GETEVENTS）
+		*flags |= iouring_syscall.IORING_ENTER_FLAGS_SQ_WAKEUP
 		return true
 	}
 	return false
 }
 
-func (iour *IOURing) submit() (submitted int, err error) {
-	submitted = iour.sq.flush()
-
-	var flags uint32
-	if !iour.needEnter(&flags) || submitted == 0 {
-		return
+// submitLocked 将已填充的 SQE 发布到 SQ，并（批量）调用 io_uring_enter。调用方需持有 submitLock。
+//
+// 合并提交（flat combining）：同一时刻只有一个 goroutine（flushing）在锁外执行 io_uring_enter，
+// 其间其他 goroutine 可以继续拿锁填充 SQE、发布后直接返回；flushing 者从系统调用返回后
+// 发现还有未提交的 SQE 就继续提交，直到 SQ 清空。这样
+//   1. 高并发时一次系统调用可以提交多个请求；
+//   2. 系统调用不再持有 submitLock，其他 goroutine 不会被串行阻塞。
+func (iour *IOURing) submitLocked() error {
+	iour.sq.flush()
+	if iour.flushing {
+		return nil
 	}
 
-	if (iour.Flags & iouring_syscall.IORING_SETUP_IOPOLL) != 0 {
-		flags |= iouring_syscall.IORING_ENTER_FLAGS_GETEVENTS
-	}
+	iour.flushing = true
+	defer func() { iour.flushing = false }()
 
-	submitted, err = iouring_syscall.IOURingEnter(iour.fd, uint32(submitted), 0, flags, nil)
-	return
-}
-
-/*
-func (iour *IOURing) submitAndWait(waitCount uint32) (submitted int, err error) {
-	submitted = iour.sq.flush()
-
-	var flags uint32
-	if !iour.needEnter(&flags) && waitCount == 0 {
-		return
-	}
-
-	if waitCount != 0 || (iour.Flags&iouring_syscall.IORING_SETUP_IOPOLL) != 0 {
-		flags |= iouring_syscall.IORING_ENTER_FLAGS_GETEVENTS
-	}
-
-	submitted, err = iouring_syscall.IOURingEnter(iour.fd, uint32(submitted), waitCount, flags, nil)
-	return
-}
-*/
-
-func (iour *IOURing) getCQEvent(wait bool) (cqe *iouring_syscall.CompletionQueueEvent, err error) {
-	var tryPeeks int
 	for {
-		if cqe = iour.cq.peek(); cqe != nil {
-			// Copy CQE.
-			cqe2 := *cqe
-			iour.cq.advance(1)
-			cqe = &cqe2
-			return
+		pending := iour.sq.flush()
+		if pending == 0 {
+			return nil
 		}
 
-		if !wait && !iour.sq.cqOverflow() {
-			err = syscall.EAGAIN
-			return
+		var flags uint32
+		if !iour.needEnter(&flags) {
+			return nil
+		}
+		if (iour.Flags & iouring_syscall.IORING_SETUP_IOPOLL) != 0 {
+			flags |= iouring_syscall.IORING_ENTER_FLAGS_GETEVENTS
+		}
+
+		iour.submitLock.Unlock()
+		_, err := iouring_syscall.IOURingEnter(iour.fd, uint32(pending), 0, flags, nil)
+		iour.submitLock.Lock()
+
+		if err != nil {
+			if errors.Is(err, syscall.EINTR) || errors.Is(err, syscall.EAGAIN) || errors.Is(err, syscall.EBUSY) {
+				// EBUSY: CQ 溢出积压，等待 run goroutine 收割完成事件后重试
+				iour.submitLock.Unlock()
+				runtime.Gosched()
+				iour.submitLock.Lock()
+				continue
+			}
+			return err
+		}
+	}
+}
+
+// reap 从 CQ 批量拷贝出至多 len(buf) 个 CQE，并一次性推进 CQ head
+func (iour *IOURing) reap(buf []iouring_syscall.CompletionQueueEvent) int {
+	cq := iour.cq
+	head := *cq.head
+	ready := atomicLoad(cq.tail) - head
+	if ready == 0 {
+		return 0
+	}
+	if ready > uint32(len(buf)) {
+		ready = uint32(len(buf))
+	}
+	mask := *cq.mask
+	for i := uint32(0); i < ready; i++ {
+		buf[i] = cq.cqes[(head+i)&mask]
+	}
+	cq.advance(ready)
+	return int(ready)
+}
+
+// waitCQ 等待新的完成事件；IOURing 关闭时返回 false
+func (iour *IOURing) waitCQ() bool {
+	for tryPeeks := 0; ; tryPeeks++ {
+		if *iour.cq.head != atomicLoad(iour.cq.tail) {
+			return true
 		}
 
 		if iour.sq.cqOverflow() {
-			_, err = iouring_syscall.IOURingEnter(iour.fd, 0, 0, iouring_syscall.IORING_ENTER_FLAGS_GETEVENTS, nil)
-			if err != nil {
-				return
+			// 让内核把溢出的 CQE 刷回 CQ
+			if _, err := iouring_syscall.IOURingEnter(iour.fd, 0, 0, iouring_syscall.IORING_ENTER_FLAGS_GETEVENTS, nil); err != nil {
+				log.Println("iouring: flush cq overflow error: ", err)
 			}
 			continue
 		}
 
-		if tryPeeks++; tryPeeks < 3 {
+		if tryPeeks < 3 {
 			runtime.Gosched()
 			continue
 		}
 
+		if iour.cqFlags {
+			// 准备睡眠：重新打开 eventfd 通知，再检查一次 CQ，避免错过刚到达的完成事件
+			iour.cq.setEventfdEnabled(true)
+			if *iour.cq.head != atomicLoad(iour.cq.tail) {
+				iour.cq.setEventfdEnabled(false)
+				return true
+			}
+		}
+
 		select {
 		case <-iour.cqeSign:
+			tryPeeks = 0
 		case <-iour.closer:
-			return nil, ErrIOURingClosed
+			return false
+		}
+		if iour.cqFlags {
+			// 醒来后进入繁忙处理阶段，关闭 eventfd 通知：处理期间到达的完成事件
+			// 由 run 循环主动收割，省去每个 CQE 都写 eventfd、唤醒 poller goroutine 的开销
+			iour.cq.setEventfdEnabled(false)
 		}
 	}
 }
 
 func (iour *IOURing) run() {
+	defer close(iour.closed)
+
+	if iour.cqFlags {
+		iour.cq.setEventfdEnabled(false)
+	}
+	cqes := make([]iouring_syscall.CompletionQueueEvent, reapBatch)
+	datas := make([]*UserData, reapBatch)
 	for {
-		cqe, err := iour.getCQEvent(true)
-		if cqe == nil || err != nil {
-			if err == ErrIOURingClosed {
-				close(iour.closed)
+		n := iour.reap(cqes)
+		if n == 0 {
+			if !iour.waitCQ() {
+				// 关闭前收割最后一批已完成的事件，剩余的由 Close 中的 failPending 处理
+				for iour.complete(cqes, datas, iour.reap(cqes)) > 0 {
+				}
 				return
 			}
-			log.Println("runComplete error: ", err)
 			continue
 		}
+		iour.complete(cqes, datas, n)
+	}
+}
 
-		// log.Println("cqe user data", (cqe.UserData))
+// complete 处理一批 CQE：一次加锁完成 user data 的查找与删除，然后逐个通知
+func (iour *IOURing) complete(cqes []iouring_syscall.CompletionQueueEvent, datas []*UserData, n int) int {
+	if n == 0 {
+		return 0
+	}
 
-		iour.userDataLock.Lock()
-		userData := iour.userDatas[cqe.UserData]
+	iour.userDataLock.Lock()
+	for i := 0; i < n; i++ {
+		id := cqes[i].UserData
+		datas[i] = iour.userDatas[id]
+		if datas[i] != nil {
+			delete(iour.userDatas, id)
+		}
+	}
+	iour.userDataLock.Unlock()
+
+	for i := 0; i < n; i++ {
+		userData := datas[i]
+		datas[i] = nil
 		if userData == nil {
-			iour.userDataLock.Unlock()
-			log.Println("runComplete: notfound user data ", uintptr(cqe.UserData))
+			log.Println("runComplete: notfound user data ", uintptr(cqes[i].UserData))
 			continue
 		}
-		delete(iour.userDatas, cqe.UserData)
-		iour.userDataLock.Unlock()
 
-		userData.request.complate(cqe)
+		userData.request.complate(&cqes[i])
 
 		// ignore link timeout
 		if userData.opcode == iouring_syscall.IORING_OP_LINK_TIMEOUT {
 			continue
 		}
+		deliver(userData.resulter, userData.request)
+	}
+	return n
+}
 
-		if userData.resulter != nil {
-			userData.resulter <- userData.request
-		}
+// deliver 把结果投递到用户的 channel。
+// channel 已满时转交给新的 goroutine 投递，避免一个消费慢的 channel
+// 阻塞完成事件 goroutine，进而拖住这个 ring 上所有其他请求（队头阻塞）。
+// 代价是 channel 满时同一 channel 内结果的顺序可能与完成顺序不一致。
+func deliver(ch chan<- Result, req *request) {
+	if ch == nil {
+		return
+	}
+	select {
+	case ch <- req:
+	default:
+		go func() { ch <- req }()
 	}
 }
 
