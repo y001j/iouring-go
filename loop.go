@@ -761,24 +761,37 @@ func (br *BufferRing) Get(res int32, flags uint32) (bid uint16, data []byte, ok 
 	return bid, br.Buf(bid)[:n], true
 }
 
+// BundleBuf 是 recv bundle 中的一个缓冲区及其中的数据
+type BundleBuf struct {
+	Bid  uint16
+	Data []byte // 该缓冲区中收到的数据（可能为空：CQE 出错但占用了缓冲区）
+}
+
 // Bundle 取出 recv bundle 的 CQE 使用的全部缓冲区，追加到 dst 并返回。
-// 内核从 CQE 中的第一个缓冲区开始，按 ring 中的顺序连续使用缓冲区，直到放下 res 字节；
-// 除最后一个外，每个缓冲区都被填满（Size 字节）。第 i 个缓冲区的数据为 br.Buf(bids[i])
-// 的前 min(Size, 剩余字节) 字节。CQE 没有占用缓冲区时返回 dst 本身；res <= 0 但占用了
-// 缓冲区时返回该缓冲区，以便归还。
+// 内核从 CQE 中的第一个缓冲区开始，按 ring 中的顺序连续使用缓冲区，直到放下 res 字节。
+// 中间的缓冲区不一定是满的：内核按 socket 中的数据量截短最后一个映射的缓冲区，并把实际长度
+// 写回 ring 条目；接收后仍有数据时会再接收一次并追加到同一个 CQE。因此每个缓冲区的长度
+// 从 ring 条目中读取（在应用重新放入该位置之前不会被覆盖）。
 // 位置由每个缓冲区放入 ring 时记录，不依赖 CQE 的到达顺序。
-func (br *BufferRing) Bundle(res int32, flags uint32, dst []uint16) []uint16 {
+// CQE 没有占用缓冲区时返回 dst 本身；res <= 0 但占用了缓冲区时返回该缓冲区（Data 为空）以便归还。
+func (br *BufferRing) Bundle(res int32, flags uint32, dst []BundleBuf) []BundleBuf {
 	if flags&iouring_syscall.IORING_CQE_F_BUFFER == 0 {
 		return dst
 	}
 	first := uint16(flags >> iouring_syscall.IORING_CQE_BUFFER_SHIFT)
 	if res <= 0 {
-		return append(dst, first)
+		return append(dst, BundleBuf{Bid: first})
 	}
 	p := br.pos[first]
-	for n := int(res); n > 0; n -= br.size {
-		dst = append(dst, br.slots[p&br.mask])
-		p++
+	for remain := int(res); remain > 0; p++ {
+		slot := int(p & br.mask)
+		bid := br.slots[slot]
+		n := int(*(*uint32)(unsafe.Pointer(&br.ringMem[slot*iouring_syscall.SizeofIOURingBuf+8])))
+		if n > remain || n <= 0 {
+			n = remain
+		}
+		dst = append(dst, BundleBuf{Bid: bid, Data: br.Buf(bid)[:n]})
+		remain -= n
 	}
 	return dst
 }

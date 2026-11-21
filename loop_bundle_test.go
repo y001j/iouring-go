@@ -49,27 +49,19 @@ func TestLoopRecvBundle(t *testing.T) {
 	done := make(chan result, 1)
 	var got []byte
 	maxBufs := 0
-	var bids []uint16
+	var bufs []BundleBuf
 	l.Post(func() {
 		var h Handler
 		h = func(res int32, flags uint32) {
-			bids = br.Bundle(res, flags, bids[:0])
-			if res > 0 {
-				if len(bids) > maxBufs {
-					maxBufs = len(bids)
-				}
-				remain := int(res)
-				for _, bid := range bids {
-					n := remain
-					if n > size {
-						n = size
-					}
-					got = append(got, br.Buf(bid)[:n]...)
-					remain -= n
-				}
+			bufs = br.Bundle(res, flags, bufs[:0])
+			if res > 0 && len(bufs) > maxBufs {
+				maxBufs = len(bufs)
 			}
-			for i := len(bids) - 1; i >= 0; i-- { // 倒序归还
-				br.Recycle(bids[i])
+			for _, b := range bufs {
+				got = append(got, b.Data...)
+			}
+			for i := len(bufs) - 1; i >= 0; i-- { // 倒序归还
+				br.Recycle(bufs[i].Bid)
 			}
 			if flags&iouring_syscall.IORING_CQE_F_MORE == 0 {
 				switch {
