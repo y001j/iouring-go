@@ -6,7 +6,10 @@
 //	proxy-std      转发代理：Go 标准库 net + io.Copy（底层 epoll netpoller）
 //	proxy-epoll    转发代理：手写 epoll 事件循环（每个 loop 绑定一个 OS 线程）
 //	proxy-iouring  转发代理：基于 iouring-go
-//	proxy-iouring-coop  同上，开启 IORING_SETUP_COOP_TASKRUN
+//	proxy-iouring-coop    同上，开启 IORING_SETUP_COOP_TASKRUN
+//	proxy-iouring-direct  iouring-go 直接回调模式（channel 为 nil）
+//	proxy-iouring-loop    iouring.Loop：单线程事件循环 + multishot recv + provided buffer ring
+//	proxy-iouring-loopfixed  同上，并使用注册文件（fixed files）
 //	load           压测客户端：C 个长连接 ping-pong，统计 QPS / 延迟
 package main
 
@@ -20,7 +23,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Println("usage: iouring-bench <backend|proxy-std|proxy-epoll|proxy-iouring|proxy-iouring-coop|load> [flags]")
+		fmt.Println("usage: iouring-bench <backend|proxy-std|proxy-epoll|proxy-iouring[-coop|-direct|-loop]|load> [flags]")
 		os.Exit(2)
 	}
 	mode, args := os.Args[1], os.Args[2:]
@@ -36,6 +39,8 @@ func main() {
 	dur := fs.Duration("d", 10e9, "load: duration")
 	warm := fs.Duration("warmup", 1e9, "load: warmup")
 	label := fs.String("label", "", "load: label for output")
+	lbufs := fs.Int("lbufs", 2048, "iouring-loop: provided buffers per loop (power of 2)")
+	lbufSize := fs.Int("lbufsize", 16384, "iouring-loop: provided buffer size")
 	fs.Parse(args)
 
 	// BENCH_PPROF=127.0.0.1:6060 开启 pprof
@@ -52,9 +57,15 @@ func main() {
 	case "proxy-epoll":
 		err = runProxyEpoll(*listen, *backend, *loops, *bufSize)
 	case "proxy-iouring":
-		err = runProxyIOURing(*listen, *backend, *loops, *workers, *bufSize, false)
+		err = runProxyIOURing(*listen, *backend, *loops, *workers, *bufSize, false, false)
 	case "proxy-iouring-coop":
-		err = runProxyIOURing(*listen, *backend, *loops, *workers, *bufSize, true)
+		err = runProxyIOURing(*listen, *backend, *loops, *workers, *bufSize, true, false)
+	case "proxy-iouring-direct":
+		err = runProxyIOURing(*listen, *backend, *loops, *workers, *bufSize, false, true)
+	case "proxy-iouring-loop":
+		err = runProxyLoop(*listen, *backend, *loops, *lbufs, *lbufSize, false)
+	case "proxy-iouring-loopfixed":
+		err = runProxyLoop(*listen, *backend, *loops, *lbufs, *lbufSize, true)
 	case "load":
 		err = runLoad(*target, *conns, *size, *dur, *warm, *label)
 	default:

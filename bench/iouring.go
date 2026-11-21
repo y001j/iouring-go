@@ -29,8 +29,12 @@ type idir struct {
 	pair     *ipair
 }
 
-func runProxyIOURing(addr, backend string, nrings, workers, bufSize int, coop bool) error {
-	ch := make(chan iouring.Result, 1<<16)
+func runProxyIOURing(addr, backend string, nrings, workers, bufSize int, coop, direct bool) error {
+	// direct 模式：channel 为 nil，回调直接在 iouring-go 的完成事件 goroutine 中执行
+	var ch chan iouring.Result
+	if !direct {
+		ch = make(chan iouring.Result, 1<<16)
+	}
 	rings := make([]*iouring.IOURing, nrings)
 	for i := range rings {
 		var opts []iouring.IOURingOption
@@ -43,7 +47,7 @@ func runProxyIOURing(addr, backend string, nrings, workers, bufSize int, coop bo
 		}
 		rings[i] = r
 	}
-	for i := 0; i < workers; i++ {
+	for i := 0; ch != nil && i < workers; i++ {
 		go func() {
 			for res := range ch {
 				res.Callback()
@@ -55,7 +59,7 @@ func runProxyIOURing(addr, backend string, nrings, workers, bufSize int, coop bo
 	if err != nil {
 		return err
 	}
-	fmt.Println("proxy-iouring listening on", addr, "rings", nrings, "workers", workers, "coop", coop)
+	fmt.Println("proxy-iouring listening on", addr, "rings", nrings, "workers", workers, "coop", coop, "direct", direct)
 
 	for i := 0; ; i++ {
 		cfd, _, err := syscall.Accept(lfd)

@@ -20,5 +20,5 @@ RUN go vet . ./syscall \
  && go build -o /usr/local/bin/echo-client ./examples/echo/client.go \
  && go build -o /usr/local/bin/iouring-bench ./bench
 
-COPY scripts/container-test.sh scripts/bench.sh scripts/profile.sh /usr/local/bin/
+COPY scripts/container-test.sh scripts/bench.sh scripts/bench_ab.sh scripts/profile.sh /usr/local/bin/
 CMD ["/usr/local/bin/container-test.sh"]

@@ -5,7 +5,7 @@ GOMAXPROCS=4 taskset -c 4-7 iouring-bench backend -listen 127.0.0.1:9000 >/dev/n
 sleep 0.3
 BENCH_PPROF=127.0.0.1:6060 GOMAXPROCS=4 taskset -c 0-3 iouring-bench proxy-$P -listen 127.0.0.1:9100 >/dev/null &
 sleep 0.3
-GOMAXPROCS=4 taskset -c 8-11 iouring-bench load -target 127.0.0.1:9100 -c 512 -size 128 -d 12s -warmup 1s -label $P &
+GOMAXPROCS=4 taskset -c 8-11 iouring-bench load -target 127.0.0.1:9100 -c 512 -size ${SIZE:-128} -d 12s -warmup 1s -label $P &
 sleep 2
 curl -s -o /tmp/cpu.pb "http://127.0.0.1:6060/debug/pprof/profile?seconds=8"
 wait %3
