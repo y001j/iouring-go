@@ -47,9 +47,15 @@ type Loop struct {
 
 	bufRings []*BufferRing
 
-	fixedBufs     [][]byte // 注册缓冲区（保持引用，防止被 GC 回收）
-	userFixedBase uint16   // LoopConfig.FixedBuffers[0] 的注册下标
-	spin          time.Duration
+	fixedBufs          [][]byte // 注册缓冲区（保持引用，防止被 GC 回收）
+	userFixedBase      uint16   // LoopConfig.FixedBuffers[0] 的注册下标
+	spin               time.Duration
+	spinFixed          bool // true：不论负载总是轮询
+	spinActive         bool // 自适应：当前是否轮询
+	spinWinStart       time.Time
+	spinWinIters       int64 // 当前窗口内的循环轮数
+	spinWinCQEs        int64 // 当前窗口内处理的完成事件数
+	spinBusy, spinIdle int64 // 自适应阈值（批量大小）
 
 	fixedFree []int32 // 注册文件表的空闲下标
 
@@ -88,7 +94,16 @@ type LoopConfig struct {
 	// SpinTime 为 Loop 在没有完成事件时阻塞前的忙轮询时长，0 表示不轮询。
 	// 轮询期间新到达的完成事件无需经过睡眠/唤醒即可处理，以 CPU 换取更低的延迟；
 	// 在唤醒代价高的环境（虚拟机、低并发 ping-pong）中收益明显，建议 10µs~50µs。
+	// 默认自适应：事件循环空闲时才轮询，满载时停止轮询以保持批量处理的效率。
 	SpinTime time.Duration
+	// SpinFixed 为 true 时不论负载总是轮询（关闭自适应）
+	SpinFixed bool
+	// 自适应轮询的阈值：按 10ms 窗口统计每轮循环处理的平均完成事件数（批量大小），
+	// 达到 SpinBusyBatch 时停止轮询，低于 SpinIdleBatch 时恢复。0 表示使用默认值（128 / 64）。
+	// 想在更高负载下继续轮询（更看重延迟）就调大，想更早停止轮询（更看重吞吐和 CPU）就调小。
+	// SpinIdleBatch 大于 SpinBusyBatch 时按 SpinBusyBatch 处理。
+	SpinBusyBatch int
+	SpinIdleBatch int
 }
 
 // fixedFileBit 标记"fd"参数实际是注册文件表中的下标
@@ -193,6 +208,18 @@ func (l *Loop) setup(cfg LoopConfig) error {
 		return err
 	}
 	l.spin = cfg.SpinTime
+	l.spinFixed = cfg.SpinFixed
+	l.spinActive = true
+	l.spinBusy, l.spinIdle = int64(cfg.SpinBusyBatch), int64(cfg.SpinIdleBatch)
+	if l.spinBusy <= 0 {
+		l.spinBusy = defaultSpinBusyBatch
+	}
+	if l.spinIdle <= 0 {
+		l.spinIdle = defaultSpinIdleBatch
+	}
+	if l.spinIdle > l.spinBusy {
+		l.spinIdle = l.spinBusy
+	}
 
 	// eventfd 用于其他 goroutine 唤醒阻塞在 io_uring_enter 中的 Loop（见 Post）。
 	// 使用阻塞模式，读取由 io_uring 异步完成。
@@ -307,7 +334,9 @@ func (l *Loop) run() {
 		}
 
 		if l.spin > 0 && atomic.LoadInt32(&l.postN) == 0 && !l.cqReady() {
-			l.spinWait()
+			if l.spinFixed || l.spinDecide() {
+				l.spinWait()
+			}
 		}
 		var wait uint32
 		if atomic.LoadInt32(&l.postN) == 0 && !l.cqReady() {
@@ -327,9 +356,46 @@ func (l *Loop) run() {
 			if n == 0 {
 				break
 			}
+			l.spinWinCQEs += int64(n)
 			l.dispatch(cqes[:n])
 		}
+		l.spinWinIters++
 	}
+}
+
+// 自适应轮询：按 spinWindow 统计事件循环每轮处理的完成事件数（批量大小），平均值达到
+// SpinBusyBatch 时停止轮询，低于 SpinIdleBatch 时恢复（滞回，避免来回切换）。
+// 负载低时每轮只有零星几个完成事件，轮询能省掉昂贵的睡眠/唤醒；满载时每轮积压数百个，
+// 阻塞期间到达的数据会攒成一大批处理，轮询反而把批次切碎、降低吞吐。
+// 默认阈值来自实测（Linux 6.17，单核服务端）：轮询在批量约 180 时使 16KB echo 变慢约 15%，
+// 在批量 60 以下时持平或明显更快。
+const (
+	spinWindow           = 10 * time.Millisecond
+	defaultSpinBusyBatch = 128
+	defaultSpinIdleBatch = 64
+)
+
+// spinDecide 在没有完成事件、即将阻塞时调用，返回本次是否轮询
+func (l *Loop) spinDecide() bool {
+	if l.spinWinIters < 64 { // 样本太少时沿用上次的决定，也避免每轮都读时钟
+		return l.spinActive
+	}
+	now := time.Now()
+	if l.spinWinStart.IsZero() {
+		l.spinWinStart = now
+	}
+	if now.Sub(l.spinWinStart) < spinWindow {
+		return l.spinActive
+	}
+	batch := l.spinWinCQEs / l.spinWinIters
+	switch {
+	case l.spinActive && batch >= l.spinBusy:
+		l.spinActive = false
+	case !l.spinActive && batch < l.spinIdle:
+		l.spinActive = true
+	}
+	l.spinWinStart, l.spinWinIters, l.spinWinCQEs = now, 0, 0
+	return l.spinActive
 }
 
 // spinWait 在阻塞前忙轮询至多 l.spin：期间提交待提交的 SQE 并检查完成事件。

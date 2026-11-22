@@ -282,3 +282,44 @@ func TestLoopFixedFiles(t *testing.T) {
 		t.Fatal("timeout")
 	}
 }
+
+// 自适应轮询：批量大时停止轮询，批量小时恢复，中间区间保持（滞回）
+func TestLoopSpinDecide(t *testing.T) {
+	l := &Loop{spin: 50 * time.Microsecond, spinActive: true, spinBusy: defaultSpinBusyBatch, spinIdle: defaultSpinIdleBatch}
+	window := func(iters, cqes int64) bool {
+		l.spinWinStart = time.Now().Add(-2 * spinWindow)
+		l.spinWinIters, l.spinWinCQEs = iters, cqes
+		return l.spinDecide()
+	}
+	if l.spinWinIters = 10; !l.spinDecide() {
+		t.Fatal("too few samples should keep the previous decision (on)")
+	}
+	if window(100, 100*200) {
+		t.Fatal("batch 200 should stop spinning")
+	}
+	if window(100, 100*100) {
+		t.Fatal("batch 100 (between thresholds) should keep spinning off")
+	}
+	if !window(100, 100*10) {
+		t.Fatal("batch 10 should resume spinning")
+	}
+	if !window(100, 100*100) {
+		t.Fatal("batch 100 (between thresholds) should keep spinning on")
+	}
+}
+
+// 自定义阈值通过 LoopConfig 生效；SpinIdleBatch 大于 SpinBusyBatch 时被收紧
+func TestLoopSpinThresholdConfig(t *testing.T) {
+	l := newLoop(t, LoopConfig{SpinTime: 50 * time.Microsecond, SpinBusyBatch: 8, SpinIdleBatch: 4})
+	if l.spinBusy != 8 || l.spinIdle != 4 {
+		t.Fatalf("thresholds = %d/%d, want 8/4", l.spinBusy, l.spinIdle)
+	}
+	l2 := newLoop(t, LoopConfig{SpinTime: 50 * time.Microsecond, SpinBusyBatch: 8, SpinIdleBatch: 100})
+	if l2.spinIdle != 8 {
+		t.Fatalf("idle threshold = %d, want clamped to 8", l2.spinIdle)
+	}
+	l3 := newLoop(t, LoopConfig{SpinTime: 50 * time.Microsecond})
+	if l3.spinBusy != defaultSpinBusyBatch || l3.spinIdle != defaultSpinIdleBatch {
+		t.Fatalf("default thresholds = %d/%d", l3.spinBusy, l3.spinIdle)
+	}
+}

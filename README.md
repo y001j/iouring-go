@@ -76,7 +76,12 @@ See `bench/loop.go` for a complete TCP forwarding proxy (ordering, short writes,
 
 Before blocking in `io_uring_enter`, the loop can busy-poll for completions for up to `SpinTime`.
 Completions that arrive during the spin are handled without a sleep/wake-up cycle, trading CPU for latency.
-This pays off where wake-ups are expensive (VMs, low-concurrency request/response); 10–50µs is a good start.
+This pays off where wake-ups are expensive (VMs, low-concurrency request/response); 50µs is a good start.
+
+Polling is **adaptive** by default. Every 10ms the loop computes the average number of completions it handles per iteration
+(the batch size). It stops polling when that reaches `SpinBusyBatch` (default 128), because a busy loop is better off blocking
+and handling larger batches. It resumes below `SpinIdleBatch` (default 64). Raise the thresholds to keep polling under heavier
+load (latency first), or lower them to stop earlier (throughput and CPU first). `SpinFixed: true` always polls.
 
 ### Zero-copy send: `SendZC`, registered buffers
 
@@ -192,7 +197,7 @@ p99 延迟：c=64/128B 时 iouring-loop 为 2.1ms（epoll 4.6ms）；c=512/16KB 
 - 新增 `WithCoopTaskRun()` 选项
 
 ## 新增（零拷贝与轮询）
-- `LoopConfig.SpinTime`：阻塞前忙轮询，降低唤醒延迟
+- `LoopConfig.SpinTime`：阻塞前忙轮询，降低唤醒延迟；默认自适应（`SpinBusyBatch`/`SpinIdleBatch` 可调，`SpinFixed` 关闭自适应）
 - `Loop.SendZC` / `SendZCFixed`：IORING_OP_SEND_ZC 零拷贝发送，处理结果 CQE 与通知 CQE
 - `LoopConfig.FixedBuffers`、`BufferRingConfig.Fixed`：注册固定缓冲区；buffer ring 注册后接收与零拷贝发送共用同一块内存
 - `Loop.RecvMultishotBundle`、`BufferRing.Bundle`、`Loop.Sendmsg`、`Loop.Features`：recv bundle（6.16 之前的内核有数据空洞 bug）与聚集发送
