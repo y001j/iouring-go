@@ -105,6 +105,10 @@ type BufferRingConfig struct {
 	// 这样这块内存同时用于接收（provided buffer）和零拷贝发送（SendZCFixed）：
 	// 收到的数据无需拷贝即可原地发出，例如 echo、转发。下标见 BufferRing.FixedIndex。
 	Fixed bool
+	// Incremental 使用增量消费（IOU_PBUF_RING_INC，Linux 6.12+）：一个缓冲区可被多次接收连续填充，
+	// 每次接收的数据接在上一次之后。用 GetIncremental 取数据；CQE 带 IORING_CQE_F_BUF_MORE
+	// 表示内核还会继续使用该缓冲区，此时不能归还。适合少量大缓冲区。不能与 bundle 同时使用。
+	Incremental bool
 }
 
 var ErrLoopClosed = errors.New("iouring loop closed")
@@ -179,7 +183,7 @@ func (l *Loop) setup(cfg LoopConfig) error {
 	}
 
 	for i, rc := range cfg.BufferRings {
-		br, err := newBufferRing(l, uint16(i), rc.Count, rc.Size)
+		br, err := newBufferRing(l, uint16(i), rc.Count, rc.Size, rc.Incremental)
 		if err != nil {
 			return err
 		}
@@ -698,16 +702,20 @@ type BufferRing struct {
 	bufMem   []byte   // count * size 字节的缓冲区
 	slots    []uint16 // ring 位置 -> buffer id（bundle 用）
 	pos      []uint16 // buffer id -> 最近一次放入的 ring 位置（tail 计数）
+	incOff   []int    // 增量消费：buffer id -> 已被消费的字节数
 	tail     uint16
 	dirty    bool
 }
 
-func newBufferRing(l *Loop, bgid uint16, count, size int) (*BufferRing, error) {
+func newBufferRing(l *Loop, bgid uint16, count, size int, incremental bool) (*BufferRing, error) {
 	if count <= 0 || count > 32768 || count&(count-1) != 0 || size <= 0 {
 		return nil, errors.New("iouring: invalid buffer ring config")
 	}
 	br := &BufferRing{l: l, fixedIdx: -1, bgid: bgid, mask: uint16(count - 1), size: size,
 		slots: make([]uint16, count), pos: make([]uint16, count)}
+	if incremental {
+		br.incOff = make([]int, count)
+	}
 	var err error
 	prot, flags := unix.PROT_READ|unix.PROT_WRITE, unix.MAP_PRIVATE|unix.MAP_ANONYMOUS|unix.MAP_POPULATE
 	if br.ringMem, err = unix.Mmap(-1, 0, count*iouring_syscall.SizeofIOURingBuf, prot, flags); err != nil {
@@ -722,6 +730,9 @@ func newBufferRing(l *Loop, bgid uint16, count, size int) (*BufferRing, error) {
 		RingAddr:    uint64(uintptr(unsafe.Pointer(&br.ringMem[0]))),
 		RingEntries: uint32(count),
 		Bgid:        bgid,
+	}
+	if incremental {
+		reg.Flags = iouring_syscall.IOU_PBUF_RING_INC
 	}
 	if err := iouring_syscall.IOURingRegister(l.fd, iouring_syscall.IORING_REGISTER_PBUF_RING, unsafe.Pointer(&reg), 1); err != nil {
 		br.free()
@@ -796,12 +807,40 @@ func (br *BufferRing) Bundle(res int32, flags uint32, dst []BundleBuf) []BundleB
 	return dst
 }
 
+// GetIncremental 从增量消费（BufferRingConfig.Incremental）的 buffer ring 的 CQE 中取出数据。
+// 本次数据位于该缓冲区上一次数据之后。more 为 true（CQE 带 IORING_CQE_F_BUF_MORE）表示内核
+// 还会继续往这个缓冲区写，此时不能归还；为 false 表示内核已用完，应用不再引用其中数据后即可 Recycle。
+// ok 为 false 表示该 CQE 没有涉及缓冲区。
+func (br *BufferRing) GetIncremental(res int32, flags uint32) (bid uint16, data []byte, more, ok bool) {
+	if flags&iouring_syscall.IORING_CQE_F_BUFFER == 0 {
+		return 0, nil, false, false
+	}
+	bid = uint16(flags >> iouring_syscall.IORING_CQE_BUFFER_SHIFT)
+	more = flags&iouring_syscall.IORING_CQE_F_BUF_MORE != 0
+	off := br.incOff[bid]
+	n := int(res)
+	if n < 0 {
+		n = 0
+	}
+	if off+n > br.size {
+		n = br.size - off
+	}
+	data = br.Buf(bid)[off : off+n : off+n]
+	if more {
+		br.incOff[bid] = off + n
+	}
+	return bid, data, more, true
+}
+
 // Recycle 归还缓冲区。归还操作在下一次 io_uring_enter 前批量发布给内核。
 func (br *BufferRing) Recycle(bid uint16) {
 	br.put(bid)
 }
 
 func (br *BufferRing) put(bid uint16) {
+	if br.incOff != nil {
+		br.incOff[bid] = 0
+	}
 	br.slots[br.tail&br.mask] = bid
 	br.pos[bid] = br.tail
 	e := br.ringMem[int(br.tail&br.mask)*iouring_syscall.SizeofIOURingBuf:]

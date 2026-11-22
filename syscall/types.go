@@ -189,6 +189,7 @@ const (
 	IORING_CQE_F_MORE                             // multishot 请求仍然有效，后续还会产生 CQE
 	IORING_CQE_F_SOCK_NONEMPTY                    // socket 中仍有可读数据
 	IORING_CQE_F_NOTIF                            // SEND_ZC 的通知 CQE
+	IORING_CQE_F_BUF_MORE                         // 增量消费的 buffer ring（6.12+）：缓冲区尚未用完，后续还会继续使用
 )
 
 const IORING_CQE_BUFFER_SHIFT = 16
@@ -207,6 +208,12 @@ const IORING_NOTIF_USAGE_ZC_COPIED int32 = -1 << 31
 
 // accept 的 ioprio 标志
 const IORING_ACCEPT_MULTISHOT uint16 = 1 << 0 // multishot accept（5.19+）
+
+// IORING_REGISTER_PBUF_RING 的标志
+const (
+	IOU_PBUF_RING_MMAP uint16 = 1 // 由内核分配 ring 内存
+	IOU_PBUF_RING_INC  uint16 = 2 // 增量消费（6.12+）：一个缓冲区可被多次接收连续填充
+)
 
 // BufReg 对应内核 struct io_uring_buf_reg，用于 IORING_REGISTER_PBUF_RING
 type BufReg struct {
